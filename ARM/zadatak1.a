@@ -1,0 +1,101 @@
+; Lab1, zadatak1.a
+; Fran Zekan
+
+        ORG 0
+        MOV SP, #0x5000
+        MOV R0, #DATA
+
+        MOV R6, #STOP
+        LDR R7, [R6], #4
+        MOV R6, #OUTPUT
+
+LOOP    LDR R1, [R0], #4
+        CMP R1, R7
+        BEQ END
+
+        LDR R2, [R0], #4
+        LDR R3, [R0], #4
+
+        CMP R1, #0x0
+        BEQ SUM_NUM
+        CMP R1, #0x1
+        BEQ SUB_NUM
+        CMP R1, #0x2
+        BEQ MULTIPL
+        CMP R1, #0x3
+        BEQ DIV_NUM
+
+        B END                  ; if not 1/2/3/4 or 8080, die
+
+
+SUM_NUM ADD R1, R2, R3
+        B CONTIN
+SUB_NUM SUB R1, R2, R3
+        B CONTIN
+MULTIPL MUL R1, R2, R3
+        B CONTIN
+DIV_NUM MOV R1, #1
+        ; SUB SP, SP, #4         ; This breaks for some reason?
+        STMFD SP!, {R2, R3}
+        BL DIJELI
+        ADD SP, SP, #8
+        LDR R1, [SP]
+
+CONTIN  STR R1, [R6], #4
+        B LOOP
+
+
+END     MOV R2, #END_SEQ
+        LDR R1, [R2], #4
+        STR R1, [R6], #4
+        SWI 0x123456
+
+END_SEQ DW 0xFFFFFFFF          ; END
+
+DIJELI  STMFD SP!, {R0, R1, R2}; Integer divide subroutine
+        MOV R0, #0x0
+        LDR R1, [SP, #12]
+        LDR R2, [SP, #16]
+
+        CMP R2, #0x0           ; check for zero division
+        BEQ RET
+
+        MOV R5, #0
+        TST R1, #0x80000000
+        BEQ R1_POS
+        ADD R5, R5, #1
+        MVN R1, R1
+        ADD R1, R1, #1       
+
+R1_POS  TST R2, #0x80000000
+        BEQ DIVLOOP
+        ADD R5, R5, #1
+        MVN R2, R2
+        ADD R2, R2, #1
+
+DIVLOOP CMP R1, R2
+        BLO RET
+        SUB R1, R1, R2
+        ADD R0, R0, #1
+        B DIVLOOP
+
+RET     CMP R5, #1
+        BNE EXIT
+        SUB R0, R0, #1
+        MVN R0, R0   
+
+EXIT    STR R0, [SP, #20]
+        LDMFD SP!, {R0, R1, R2}
+        MOV PC, LR
+
+
+        ORG 0x500
+DATA    DW 0x0003, 0xFFFFFEFF, 0x0010, 0x0001, 0x01F4, 0xFFFFFD44, 0x0002, 0xFFFFFFFE, 0x000A, 0x0003, 0xFFFFF000, 0xFFFFFFC0
+;DATA    DW 0x0003, 0xFFFFFFFE, 0xFFFFFFFE, 0x0001, 0x01F4, 0xFFFFFD44, 0x0002, 0xFFFFFFFE, 0x000A, 0x0003, 0xFFFFF000, 0xFFFFFFC0
+STOP    DW 0x80808080          ; STOP SEQUENCE
+
+        ORG 0x1000
+OUTPUT  DW 0, 0, 0, 0, 0, 0, 0 ; Output space
+
+        ORG 0x5000
+DEBUG   DW 0, 0, 0, 0, 0, 0, 0 ; debug
