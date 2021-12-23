@@ -1,0 +1,27 @@
+        ORG 0
+        LDR R1, GPIO
+        
+        MOV R2, #0b11100000
+        STR R2, [R1, #8]
+        MOV R2, #0b00000000
+        STR R2, [R1, #0]
+
+        MOV R9, #LEDS
+        MOV R3, #0
+PETLJA
+        LDRB R4, [R9, R3]
+
+        LDR R1, GPIO
+        STRB R4, [R1, #0]
+
+        CMP R3, #3 ; index 3
+        BEQ RST_CNT
+        ADD R3, R3, #1
+        B PETLJA
+RST_CNT MOV R3, #0
+        B PETLJA
+
+        ORG 500
+
+GPIO DW 0xFFFF0B00
+LEDS DB 0b00100000, 0b01100000, 0b10000000, 0b01000000

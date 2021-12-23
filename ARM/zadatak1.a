@@ -1,101 +1,79 @@
-; Lab1, zadatak1.a
+; Lab2, zadatak1.a
 ; Fran Zekan
 
         ORG 0
-        MOV SP, #0x5000
-        MOV R0, #DATA
+        B MAIN
+        ORG 0x18
+        B RUN_IRQ
 
-        MOV R6, #STOP
-        LDR R7, [R6], #4
-        MOV R6, #OUTPUT
+MAIN
+        ; init and reset outputs
+        LDR R1, GPIO
+        
+        MOV R2, #0b11100000
+        STR R2, [R1, #8]
+        LDR R2, LEDS
+        STR R2, [R1, #0]
 
-LOOP    LDR R1, [R0], #4
-        CMP R1, R7
-        BEQ END
+        ; init irq
+        MSR CPSR, #0b11010010
+        MOV R13, #0x10000
 
-        LDR R2, [R0], #4
-        LDR R3, [R0], #4
+        MSR CPSR, #0b11010011
+        MOV R13, #0xFC00
 
-        CMP R1, #0x0
-        BEQ SUM_NUM
-        CMP R1, #0x1
-        BEQ SUB_NUM
-        CMP R1, #0x2
-        BEQ MULTIPL
-        CMP R1, #0x3
-        BEQ DIV_NUM
+        ; init RTC
+        LDR R0, RTC
 
-        B END                  ; if not 1/2/3/4 or 8080, die
+        MOV R1, #0
+        STR R1, [R0, #0x0C] ; reset count
 
+        MOV R1, #5
+        STR R1, [R0, #0x04] ; when to trigger
 
-SUM_NUM ADD R1, R2, R3
-        B CONTIN
-SUB_NUM SUB R1, R2, R3
-        B CONTIN
-MULTIPL MUL R1, R2, R3
-        B CONTIN
-DIV_NUM MOV R1, #1
-        ; SUB SP, SP, #4         ; This breaks for some reason?
-        STMFD SP!, {R2, R3}
-        BL DIJELI
-        ADD SP, SP, #8
-        LDR R1, [SP]
+        MOV R1, #1
+        STR R1, [R0, #0x10] ; allow interrupts
 
-CONTIN  STR R1, [R6], #4
-        B LOOP
+        MRS R0, CPSR
+        BIC R0, R0, #0b10000000
+        MSR CPSR, R0
 
+LOOP    B LOOP
 
-END     MOV R2, #END_SEQ
-        LDR R1, [R2], #4
-        STR R1, [R6], #4
-        SWI 0x123456
+RUN_IRQ STMFD SP!, {R0-R3}
+        
+        ; set leds
+        LDR R0, GPIO
+        MOV R2, #LEDS
+        LDR R3, LED_IND    ; load curr index
+        LDRB R1, [R2, R3]  ; load curr state
+        STRB R1, [R0, #0]
 
-END_SEQ DW 0xFFFFFFFF          ; END
+        CMP R3, #3 ; index 3
+        BEQ RST_CNT
+        ADD R3, R3, #1
+        B DONE
+RST_CNT MOV R3, #0
 
-DIJELI  STMFD SP!, {R0, R1, R2}; Integer divide subroutine
-        MOV R0, #0x0
-        LDR R1, [SP, #12]
-        LDR R2, [SP, #16]
+DONE    STR R3, LED_IND
+        LDMFD SP!, {R0-R3}
 
-        CMP R2, #0x0           ; check for zero division
-        BEQ RET
+        ; reset counter
+        LDR R0, RTC
+        MOV R1, #0
+        STR R1, [R0, #0x0C]
+        STR R1, [R0, #0x08]
 
-        MOV R5, #0
-        TST R1, #0x80000000
-        BEQ R1_POS
-        ADD R5, R5, #1
-        MVN R1, R1
-        ADD R1, R1, #1       
+        SUBS PC, LR, #4
 
-R1_POS  TST R2, #0x80000000
-        BEQ DIVLOOP
-        ADD R5, R5, #1
-        MVN R2, R2
-        ADD R2, R2, #1
+        ORG 500
 
-DIVLOOP CMP R1, R2
-        BLO RET
-        SUB R1, R1, R2
-        ADD R0, R0, #1
-        B DIVLOOP
+; devices
+RTC     DW 0xFFFF0E00
+GPIO    DW 0xFFFF0B00
 
-RET     CMP R5, #1
-        BNE EXIT
-        SUB R0, R0, #1
-        MVN R0, R0   
-
-EXIT    STR R0, [SP, #20]
-        LDMFD SP!, {R0, R1, R2}
-        MOV PC, LR
+; stores
+LEDS    DB 0b00100000, 0b01100000, 0b10000000, 0b01000000
+LED_IND DW 1 ; since we start with state[0] on load
 
 
-        ORG 0x500
-DATA    DW 0x0003, 0xFFFFFEFF, 0x0010, 0x0001, 0x01F4, 0xFFFFFD44, 0x0002, 0xFFFFFFFE, 0x000A, 0x0003, 0xFFFFF000, 0xFFFFFFC0
-;DATA    DW 0x0003, 0xFFFFFFFE, 0xFFFFFFFE, 0x0001, 0x01F4, 0xFFFFFD44, 0x0002, 0xFFFFFFFE, 0x000A, 0x0003, 0xFFFFF000, 0xFFFFFFC0
-STOP    DW 0x80808080          ; STOP SEQUENCE
-
-        ORG 0x1000
-OUTPUT  DW 0, 0, 0, 0, 0, 0, 0 ; Output space
-
-        ORG 0x5000
-DEBUG   DW 0, 0, 0, 0, 0, 0, 0 ; debug
