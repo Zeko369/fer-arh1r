@@ -1,0 +1,79 @@
+; Lab2, zadatak2.a
+; Fran Zekan
+
+        ORG 0
+        MOV R7, #0
+        B MAIN
+        ORG 0x18
+        B DMA_END
+        ORG 0x1C
+FIQ     STMFD SP!, {LR}
+        LDR R8, RTC
+REINIT  MOV R9, #0
+        STR R9, [R8, #0x0C]
+        STR R9, [R8, #0x08]
+        BL MAIN
+        LDMFD SP!, {LR}
+BACK    SUBS PC, LR, #4
+
+MAIN
+        ; init irq
+        MSR CPSR, #0b11010010
+        MOV R13, #0x10000
+
+        MSR CPSR, #0b11010011
+        MOV R13, #0xFC00
+
+        ; init DMAC
+        LDR R1, DMAC_A
+        MOV R0, #0x0500
+        STR R0, [R1,#0x10] ; Source address
+
+        MOV R0, #0x0700             
+        STR R0, [R1,#0x14] ; Destination address
+
+        MOV R0, #0x000A    ; 10(10) items
+        STR R0, [R1,#0x18]
+
+        MOV R0, #0b10101100
+        STR R0, [R1,#0x1C] ; Configuration
+
+        MRS R0, CPSR
+        BIC R0, R0, #0b10000000
+        MSR CPSR, R0
+
+        MOV R0, #1
+        STR R0, [R1,#0]
+
+CONT    CMP R7, #5
+        BNE CONT
+        SWI 123456
+
+DMA_END STMFD SP!, {R1-LR}
+        
+        MOV R1, #0x00FF0000
+        STR R1, [R1, #0x4]
+
+        BL DONE
+
+        LDMFD SP!, {R1-LR}
+        SUBS PC, LR, #4
+
+DONE    ADD R7, R7, #1
+        MOV PC, LR
+
+        ORG 400
+
+; devices
+RTC     DW 0xFFFF0E00
+DMAC_A  DW 0x00FF0000
+
+; source
+        ORG 0x0500
+        DW 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+
+; dest
+        ORG 0x0700
+        DW 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+
