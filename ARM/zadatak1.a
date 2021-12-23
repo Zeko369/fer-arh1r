@@ -56,7 +56,6 @@ RUN_IRQ STMFD SP!, {R0-R3}
 RST_CNT MOV R3, #0
 
 DONE    STR R3, LED_IND
-        LDMFD SP!, {R0-R3}
 
         ; reset counter
         LDR R0, RTC
@@ -64,6 +63,7 @@ DONE    STR R3, LED_IND
         STR R1, [R0, #0x0C]
         STR R1, [R0, #0x08]
 
+        LDMFD SP!, {R0-R3}
         SUBS PC, LR, #4
 
         ORG 500
