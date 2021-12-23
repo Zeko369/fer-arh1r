@@ -1,0 +1,563 @@
+ADEL_debug
+
+globals {
+	int counter = 0;
+}
+
+init {
+	setProcessorName("RV32I");
+	
+	setAddressWidth(32);
+	setMemoryWordWidth(8);
+	setCodeAlign(4);
+	
+	setCommentSign(";");
+	setSeparators(",()");
+	setIgnoreCase();
+	setMaxLabelLength(32);
+	
+	setHexadecimalPrefix("0X", "0x");
+	setBinaryPrefix("0B", "0b");
+	setDecimalPrefix();
+}
+
+functions {
+	void check_I_imm(imm) {
+		int imm11_31 = getBitsAsInt(11, 31, imm);
+		if (imm11_31 != 0 && imm11_31 != -1)
+			error("I-immediate value not in range\n");
+	}
+	
+	void check_S_imm(imm) {
+		int imm11_31 = getBitsAsInt(11, 31, imm);
+		if (imm11_31 != 0 && imm11_31 != -1)
+			error("S-immediate value not in range\n");
+	}
+	
+	void check_B_imm(imm) {
+		int imm12_31 = getBitsAsInt(12, 31, imm);
+		if (imm12_31 != 0 && imm12_31 != -1 || getBit(0, imm))
+			error("B-immediate value not in range\n");
+	}
+	
+	void check_U_imm(imm) {
+		if (getBitsAsInt(0, 11, imm))
+			error("U-immediate value not in range\n");
+	}
+	
+	void check_J_imm(imm) {
+		int imm20_31 = getBitsAsInt(20, 31, imm);
+		if (imm20_31 != 0 && imm20_31 != -1 || getBit(0, imm))
+			error("J-immediate value not in range\n");
+	}
+}
+
+integers {
+	free signed_32(32);
+	free unsigned unsigned_32(32);
+	free unsigned shamt(5);
+	free unsigned csr_uimm(5);
+	unsigned target(32);
+	unsigned block_size(32);
+	free nolabel data_byte(8);
+	free nolabel data_half(16);
+	free nolabel data_word(32);
+	free nolabel data_long(64);
+	unsigned nolabel addr(32);
+}
+
+indexes {
+	register_number(5);
+}
+
+strings {
+	terminated doubleQuoted string_t;	// Used for .string
+}
+
+replacements {
+	rd, rs1, rs2 (5) {
+		"X`register_number`" = register_number
+		"ZERO" = 00000
+		"RA"  = 00001
+		"SP"  = 00010
+		"GP"  = 00011
+		"TP"  = 00100
+		"T0"  = 00101
+		"T1"  = 00110
+		"T2"  = 00111
+		"S0"  = 01000
+		"FP"  = 01000
+		//Trebaju ici ranije zbog načina na koji adel gleda stringove
+		"S10" = 11010
+		"S11" = 11011
+		//
+		"S1"  = 01001
+		"A0"  = 01010
+		"A1"  = 01011
+		"A2"  = 01100
+		"A3"  = 01101
+		"A4"  = 01110
+		"A5"  = 01111
+		"A6"  = 10000
+		"A7"  = 10001
+		"S2"  = 10010
+		"S3"  = 10011
+		"S4"  = 10100
+		"S5"  = 10101
+		"S6"  = 10110
+		"S7"  = 10111
+		"S8"  = 11000
+		"S9"  = 11001
+		"T3"  = 11100
+		"T4"  = 11101
+		"T5"  = 11110
+		"T6"  = 11111
+	}
+	
+	csr_r (12) {
+		"MSTATUS" = 0011,0000,0000
+		"MISA" = 0011,0000,0001
+		"MIE" = 0011,0000,0100
+		"MTVEC" = 0011,0000,0101
+		"MEPC" = 0011,0100,0001
+		"MCAUSE" = 0011,0100,0010
+		"MTVAL" = 0011,0100,0011
+		"MIP" = 0011,0100,0100
+		"MCYCLE" = 1011,0000,0000
+		"MINSTRET" = 1011,0000,0010
+		"MCYCLEH" = 1011,1000,0000
+		"MINSTRETH" = 1011,1000,0010
+	
+		"MVENDORID" = 1111,0001,0001
+		"MARCHID" = 1111,0001,0010
+		"MIMPID" = 1111,0001,0011
+		"MHARTID" = 1111,0001,0100
+	}
+	
+	csr_w (12) {
+		"MSTATUS" = 0011,0000,0000
+		"MISA" = 0011,0000,0001
+		"MIE" = 0011,0000,0100
+		"MTVEC" = 0011,0000,0101
+		"MEPC" = 0011,0100,0001
+		"MCAUSE" = 0011,0100,0010
+		"MTVAL" = 0011,0100,0011
+		"MIP" = 0011,0100,0100
+		"MCYCLE" = 1011,0000,0000
+		"MINSTRET" = 1011,0000,0010
+		"MCYCLEH" = 1011,1000,0000
+		"MINSTRETH" = 1011,1000,0010
+	}
+	
+	csr_zero (5) {
+		"X0" = 00000
+		"ZERO" = 00000
+	}
+	
+	pc_offset (32) {
+		"`target`" =
+		(32) {
+			if (hasUnknownValue(target))
+				emitNumber(0, 32);
+			else
+				emitNumber(target - asmLC, 32);
+		}
+	}
+	
+	branch (3) {
+		"BLTU" = 110
+		"BGEU" = 111
+	
+		"BEQ" = 000
+		"BNE" = 001
+		"BLT" = 100
+		"BGE" = 101
+	}
+	
+	load (3) {
+		"LBU" = 100
+		"LHU" = 101
+		
+		"LB" = 000
+		"LH" = 001
+		"LW" = 010
+	}
+	
+	store (3) {
+		"SB" = 000
+		"SH" = 001
+		"SW" = 010
+	}
+	
+	op_imm (3) {
+		"ADDI" = 000
+		"SLTI" = 010
+		"XORI" = 100
+		"ORI" = 110
+		"ANDI" = 111
+	}
+	
+	shift (10) {
+		"SLLI" = 0000000001
+		"SRLI" = 0000000101
+		"SRAI" = 0100000101
+	}
+	
+	op (10) {
+		"ADD" = 0000000000
+		"SUB" = 0100000000
+		"SLL" = 0000000001
+		
+		"SLTU" = 0000000011
+		"SLT" = 0000000010
+		
+		"XOR" = 0000000100
+		"SRL" = 0000000101
+		"SRA" = 0100000101
+		"OR" = 0000000110
+		"AND" = 0000000111
+	}
+	
+	csrinst_reg (3) {
+		"CSRRW" = 001
+		"CSRRS" = 010
+		"CSRRC" = 011
+	}
+	
+	csrinst_imm (3) {
+		"CSRRWI" = 101
+		"CSRRSI" = 110
+		"CSRRCI" = 111
+	}
+	
+	base_instruction (32) {
+		"LUI `rd`,`signed_32`" =
+			(0){ check_U_imm(signed_32); },
+			signed_32(12,31), rd, 0110111
+		
+		"LUI `rd`,%HI(`signed_32`)" =
+			(20){ emitNumber(getBitsAsInt(12, 31, signed_32) + getBit(11, signed_32), 20); },
+			rd, 0110111
+		
+		"AUIPC `rd`,`signed_32`" =
+			(0){ check_U_imm(signed_32); },
+			signed_32(12,31), rd, 0010111
+		
+		"AUIPC `rd`,%PCREL_HI(`pc_offset`)" =
+			(20){ emitNumber(getBitsAsInt(12, 31, pc_offset) + getBit(11, pc_offset), 20); },
+			rd, 0010111
+		
+		"JAL `rd`,`pc_offset`" =
+			(0){ check_J_imm(pc_offset); },
+			pc_offset(20), pc_offset(1,10), pc_offset(11), pc_offset(12,19), rd, 1101111
+		
+		"JALR `rd`,`signed_32`(`rs1`)" =
+			(0){ check_I_imm(signed_32); },
+			signed_32(0,11), rs1, 000, rd, 1100111
+		
+		
+		"JALR `rd`,%PCREL_LO(`pc_offset`)(`rs1`)" =
+			(12){ emitNumber(getBits(0, 11, pc_offset + 4), 12); },
+			rs1, 000, rd, 1100111
+		
+		"`branch` `rs1`,`rs2`,`pc_offset`" = 
+			(0){ check_B_imm(pc_offset); },
+			pc_offset(12), pc_offset(5,10), rs2, rs1, branch, pc_offset(1,4), pc_offset(11), 1100011
+		
+		"`load` `rd`,`signed_32`(`rs1`)" =
+			(0){ check_I_imm(signed_32); },
+			signed_32(0,11), rs1, load, rd, 0000011
+		
+		"`load` `rd`,%PCREL_LO(`pc_offset`)(`rs1`)" =
+			(12){ emitNumber(getBits(0, 11, pc_offset + 4), 12); },
+			rs1, load, rd, 0000011
+		
+		"`store` `rs2`,`signed_32`(`rs1`)" =
+			(0){ check_S_imm(signed_32); },
+			signed_32(5,11), rs2, rs1, store, signed_32(0,4), 0100011
+		
+		"`store` `rs2`,%PCREL_LO(`pc_offset`)(`rs1`)" =
+			(25){
+				int imm = getBits(0, 11, pc_offset + 4);
+				emitBits(5, 11, imm);
+				emitBits(0, 4, rs2);
+				emitBits(0, 4, rs1);
+				emitBits(0, 2, store);
+				emitBits(0, 4, imm);
+			},
+			0100011
+		
+		"`op_imm` `rd`,`rs1`,`signed_32`" =
+			(0){ check_I_imm(signed_32); },
+			signed_32(0,11), rs1, op_imm, rd, 0010011
+		
+		"ADDI `rd`,`rs1`,%LO(`signed_32`)" =
+			signed_32(0,11), rs1, 000, rd, 0010011
+		
+		"ADDI `rd`,`rs1`,%PCREL_LO(`pc_offset`)" =
+			(12){ emitNumber(getBits(0, 11, pc_offset + 4), 12); },
+			rs1, 000, rd, 0010011
+		
+		"SLTIU `rd`,`rs1`,`unsigned_32`" =
+			(0){ check_I_imm(unsigned_32); },
+			unsigned_32(0,11), rs1, 011, rd, 0010011
+		
+		"`shift` `rd`,`rs1`,`shamt`" = shift(3,9), shamt, rs1, shift(0,2), rd, 0010011
+		
+		"`op` `rd`,`rs1`,`rs2`" = op(3,9), rs2, rs1, op(0,2), rd, 0110011
+		
+		"MRET" = 0011000,00010,00000,000,00000,1110011
+		
+		"CSRRW `rd`,`csr_w`,`rs1`" = csr_w, rs1, 001, rd, 1110011
+		
+		"CSRRS `rd`,`csr_w`,`rs1`" = csr_w, rs1, 010, rd, 1110011
+		"CSRRS `rd`,`csr_r`,`csr_zero`" = csr_r, csr_zero, 010, rd, 1110011
+		
+		"CSRRC `rd`,`csr_w`,`rs1`" = csr_w, rs1, 011, rd, 1110011
+		"CSRRC `rd`,`csr_r`,`csr_zero`" = csr_r, csr_zero, 011, rd, 1110011
+		
+		"CSRRWI `rd`,`csr_w`,`csr_uimm`" = csr_w, csr_uimm, 101, rd, 1110011
+		
+		"CSRRSI `rd`,`csr_w`,`csr_uimm`" = csr_w, csr_uimm, 110, rd, 1110011
+		"CSRRSI `rd`,`csr_r`,`csr_uimm`" =
+			(0){ if(csr_uimm != 0) error(); },
+			csr_r, csr_uimm, 110, rd, 1110011
+		
+		"CSRRCI `rd`,`csr_w`,`csr_uimm`" = csr_w, csr_uimm, 111, rd, 1110011
+		"CSRRCI `rd`,`csr_r`,`csr_uimm`" =
+			(0){ if(csr_uimm != 0) error(); },
+			csr_r, csr_uimm, 111, rd, 1110011
+		
+		// addi x0, x0, 0
+		"NOP" = 000000000000, 00000, 000, 00000, 0010011
+		
+		"HALT" = 0000,0000,0000,0000,0000,0000,0000,0000
+	}
+	
+	byte_list {
+		"`data_byte`,`byte_list`" = byte_list # data_byte
+		"`data_byte`" = data_byte
+	}
+	
+	half_list {
+		"`data_half`,`half_list`" = half_list # data_half(8,15) # data_half(0,7)
+		"`data_half`" = data_half(8,15) # data_half(0,7)
+	}
+	
+	word_list {
+		"`data_word`,`word_list`" = word_list # data_word(24,31) # data_word(16,23) # data_word(8,15) # data_word(0,7)
+		"`data_word`" = data_word(24,31) # data_word(16,23) # data_word(8,15) # data_word(0,7)
+	}
+	
+	long_list {
+		"`data_long`,`long_list`" = long_list # data_long(56,63) # data_long(48,55) # data_long(40,47) # data_long(32,39) # data_long(24,31) # data_long(16,23) # data_long(8,15) # data_long(0,7)
+		"`data_long`" = data_long(56,63) # data_long(48,55) # data_long(40,47) # data_long(32,39) # data_long(24,31) # data_long(16,23) # data_long(8,15) # data_long(0,7)
+	}
+}
+
+reserved_words {
+	instructions {
+		"LUI", "AUIPC",
+		"JAL", "JALR",
+		"BEQ", "BNE", "BLT", "BGE", "BLTU", "BGEU",
+		"LB", "LH", "LW",
+		"SB", "SH", "SW",
+		"ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI", "SRAI",
+		"ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
+		"NOP",
+		"MRET",
+		"CSRRW", "CSRRS", "CSRRC",
+		"CSRRWI", "CSRRSI", "CSRRCI",
+		"HALT"
+	}
+	
+	directives {
+		"ORG", "EQU", "DSTR", "DS", "DB", "DH", "DW", "DD"
+	}
+	
+	registers {
+		"X`register_number`",
+		"ZERO", "RA", "SP", "GP", "TP",
+		"T0", "T1", "T2",
+		"S0", "FP", "S1",
+		"A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+		"S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11",
+		"T3", "T4", "T5", "T6",
+		"MSTATUS", "MISA", "MIE", "MTVEC", "MEPC", "MCAUSE", "MTVAL", "MIP",
+		"MVENDORID", "MARCHID", "MHARTID"
+	}
+}
+
+directives {
+	".EQU `data_word`" =
+		{
+			if (currentLineHasLabel) {
+				currentLabelValue = data_word;
+			} else {
+				error ("Missing label");
+			}
+		}
+	
+	"EQU `data_word`" =
+		{
+			if (currentLineHasLabel) {
+				currentLabelValue = data_word;
+			} else {
+				error ("Missing label");
+			}
+		}
+
+	".ORG `addr`" =
+		{	
+			if (currentLineHasLabel) {
+				error("Label not allowed");
+			} else if (addr < asmLC) {
+				error("Address too low");
+			} else {
+				asmLC = addr;
+			}
+		}
+	
+	"ORG `addr`" =
+		{	
+			if (currentLineHasLabel) {
+				error("Label not allowed");
+			} else if (addr < asmLC) {
+				error("Address too low");
+			} else {
+				asmLC = addr;
+			}
+		}
+	
+	".BYTE `byte_list`" = byte_list
+	
+	"DB `byte_list`" = byte_list
+	
+	".HALF `half_list`" =
+		{
+			if (asmLC % 2 != 0)
+				asmLC = asmLC + 1;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		half_list
+		
+	"DH `half_list`" =
+		{
+			if (asmLC % 2 != 0)
+				asmLC = asmLC + 1;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		half_list
+	
+	".WORD `word_list`" =
+		{
+			if (asmLC % 4 != 0)
+				asmLC = ((asmLC + 3) / 4) * 4;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		word_list
+	
+	"DW `word_list`" =
+		{
+			if (asmLC % 4 != 0)
+				asmLC = ((asmLC + 3) / 4) * 4;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		word_list
+	
+	".LONG `long_list`" =
+		{
+			if (asmLC % 8 != 0)
+				asmLC = ((asmLC + 7) / 8) * 8;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		long_list
+	
+	"DD `long_list`" =
+		{
+			if (asmLC % 8 != 0)
+				asmLC = ((asmLC + 7) / 8) * 8;
+			if (currentLineHasLabel)
+				currentLabelValue = asmLC;
+		},
+		long_list
+	
+	".ZERO `block_size`" =
+		{
+			if (block_size + asmLC - 1 > 4294967295) {
+				error("Block size too large");
+			} else if (block_size == 0) {
+				error("Block size cannot be zero");
+			} else {
+				counter = block_size;
+				while (counter != 0) {
+					emitNumber(0,8);
+					emitNextWord();
+					counter -= 1;
+				}
+			}
+		}
+	
+	"DS `block_size`" =
+		{
+			if (block_size + asmLC - 1 > 4294967295) {
+				error("Block size too large");
+			} else if (block_size == 0) {
+				error("Block size cannot be zero");
+			} else {
+				counter = block_size;
+				while (counter != 0) {
+					emitNumber(0,8);
+					emitNextWord();
+					counter -= 1;
+				}
+			}
+		}
+	
+	".STRING `string_t`" =
+		{
+			int i;
+			int character;
+
+			i = lengthOf(string_t) - 1;
+			while (i >= 0) {
+				character = getChar(i, string_t);
+				emitNumber(character, 8);
+				emitNextWord();
+				i -= 1;
+			}
+
+			if(currentLineHasLabel)
+				currentLabelValue = asmLC;
+		}
+	
+	"DSTR `string_t`" =
+		{
+			int i;
+			int character;
+
+			i = lengthOf(string_t) - 1;
+			while (i >= 0) {
+				character = getChar(i, string_t);
+				emitNumber(character, 8);
+				emitNextWord();
+				i -= 1;
+			}
+
+			if(currentLineHasLabel)
+				currentLabelValue = asmLC;
+		}
+}
+
+instructions {
+	"`base_instruction`" =
+		base_instruction(24,31) #
+		base_instruction(16,23) #
+		base_instruction(8,15) #
+		base_instruction(0,7)
+}

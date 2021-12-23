@@ -1,0 +1,1216 @@
+// citanje sa portova se provodi na zahtjev CPU, pisanje isto tako uz iznimku da
+// se pisanje na izlazne prikljucke obavi i tokom inicijalizacije
+
+component GPIO_IO 
+<
+    component_title
+>
+(   in<32> --ADDR, inout<32> --DATA, in --WRITE, in --SEL,
+                   
+    inout --XPA0, inout --XPA1, inout --XPA2, inout --XPA3,
+    inout --XPA4, inout --XPA5, inout --XPA6, inout --XPA7,
+                   
+    inout --XPB0, inout --XPB1, inout --XPB2, inout --XPB3,
+    inout --XPB4, inout --XPB5, inout --XPB6, inout --XPB7
+)
+{
+    // presentation -------------------------------------------------------------
+    external display {
+        rectangle lbl {
+            x: 0;
+            y: 0;
+            width: 80;
+            height: 100;
+            fill_color: #FFFFFF;
+            text: component_title;
+        }
+        plus_mark {
+            x:0; y:0;
+        } 
+
+        rectangle portA {
+            x: 15;
+            y: 14;
+            width: 50;
+            height: 14;
+            text: "0000 0000";
+            text_size: 10;
+        }
+        
+        rectangle portB {
+            x: 15;
+            y: 73;
+            width: 50;
+            height: 14;
+            text: "0000 0000";
+            text_size: 10;
+        }
+    }
+    
+    display {
+    
+        ////// PORT A //////////////
+        
+        // title and border
+        label {
+            x:0;
+            y:0;
+            width: 180;
+            height: 10;
+            text: "Port A";
+        }
+        rectangle {
+            x:0;
+            y:15;
+            width:  180;
+            height: 140;
+        }
+        
+        // direction register
+        label {
+            x:20;
+            y:30;
+            width: 80;
+            height: 15;
+            text: "DDR (0=in 1=out)";            
+        }
+        rectangle a_dir {
+            x:20;
+            y:50;
+            width: 80;
+            height: 20;
+            text: "0000 0000";
+        }
+        
+        // data register
+        label {
+            x:20;
+            y:95;
+            width: 80;
+            height: 15;
+            text: "DR (data)";            
+        }
+        rectangle a_data {
+            x:20;
+            y:115;
+            width: 80;
+            height: 20;
+            text: "0000 0000";
+        }
+        
+        // pin 7
+        rectangle a_data_7 {
+            x:175;
+            y:130;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_7 {
+            x:195;
+            y:130;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:130;
+            width:  35;
+            height: 15;
+            text: "XPA[7]";
+        }
+        
+        // pin 6
+        rectangle a_data_6 {
+            x:175;
+            y:115;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_6 {
+            x:195;
+            y:115;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:115;
+            width:  35;
+            height: 15;
+            text: "XPA[6]";
+        }
+        
+        // pin 5
+        rectangle a_data_5 {
+            x:175;
+            y:100;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_5 {
+            x:195;
+            y:100;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:100;
+            width:  35;
+            height: 15;
+            text: "XPA[5]";
+        }
+
+        // pin 4
+        rectangle a_data_4 {
+            x:175;
+            y:85;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_4 {
+            x:195;
+            y:85;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:85;
+            width:  35;
+            height: 15;
+            text: "XPA[4]";
+        }
+        
+        // pin 3
+        rectangle a_data_3 {
+            x:175;
+            y:70;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_3 {
+            x:195;
+            y:70;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:70;
+            width:  35;
+            height: 15;
+            text: "XPA[3]";
+        }
+        
+        // pin 2
+        rectangle a_data_2 {
+            x:175;
+            y:55;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_2 {
+            x:195;
+            y:55;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:55;
+            width:  35;
+            height: 15;
+            text: "XPA[2]";
+        }
+        
+        // pin 1
+        rectangle a_data_1 {
+            x:175;
+            y:40;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_1 {
+            x:195;
+            y:40;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:40;
+            width:  35;
+            height: 15;
+            text: "XPA[1]";
+        }
+        
+        // pin 0
+        rectangle a_data_0 {
+            x:175;
+            y:25;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label a_dir_0 {
+            x:195;
+            y:25;
+            width:  15;
+            height: 15;
+            text: "<";
+        }
+        label {
+            x:135;
+            y:25;
+            width:  35;
+            height: 15;
+            text: "XPA[0]";
+        }
+        
+        ////// PORT B //////////////
+        
+        // title and border
+        label {
+            x:0;
+            y:200;
+            width: 180;
+            height: 10;
+            text: "Port B";
+        }
+        rectangle {
+            x:0;
+            y:215;
+            width:  180;
+            height: 140;
+        }
+        
+        // direction register
+        label {
+            x:20;
+            y:230;
+            width: 80;
+            height: 15;
+            text: "DDR (0=out 1=in)";            
+        }
+        rectangle b_dir {
+            x:20;
+            y:250;
+            width: 80;
+            height: 20;
+            text: "0000 0000";
+        }
+        
+        // data register
+        label {
+            x:20;
+            y:295;
+            width: 80;
+            height: 15;
+            text: "DR (data)";            
+        }
+        rectangle b_data {
+            x:20;
+            y:315;
+            width: 80;
+            height: 20;
+            text: "0000 0000";
+        }
+        
+        // pin 7
+        rectangle b_data_7 {
+            x:175;
+            y:330;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_7 {
+            x:195;
+            y:330;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:330;
+            width:  35;
+            height: 15;
+            text: "XPB[7]";
+        }
+        
+        // pin 6
+        rectangle b_data_6 {
+            x:175;
+            y:315;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_6 {
+            x:195;
+            y:315;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:315;
+            width:  35;
+            height: 15;
+            text: "XPB[6]";
+        }
+        
+        // pin 5
+        rectangle b_data_5 {
+            x:175;
+            y:300;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_5 {
+            x:195;
+            y:300;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:300;
+            width:  35;
+            height: 15;
+            text: "XPB[5]";
+        }
+
+        // pin 4
+        rectangle b_data_4 {
+            x:175;
+            y:285;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_4 {
+            x:195;
+            y:285;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:285;
+            width:  35;
+            height: 15;
+            text: "XPB[4]";
+        }
+        
+        // pin 3
+        rectangle b_data_3 {
+            x:175;
+            y:270;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_3 {
+            x:195;
+            y:270;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:270;
+            width:  35;
+            height: 15;
+            text: "XPB[3]";
+        }
+        
+        // pin 2
+        rectangle b_data_2 {
+            x:175;
+            y:255;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_2 {
+            x:195;
+            y:255;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:255;
+            width:  35;
+            height: 15;
+            text: "XPB[2]";
+        }
+        
+        // pin 1
+        rectangle b_data_1 {
+            x:175;
+            y:240;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_1 {
+            x:195;
+            y:240;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:240;
+            width:  35;
+            height: 15;
+            text: "XPB[1]";
+        }
+        
+        // pin 0
+        rectangle b_data_0 {
+            x:175;
+            y:225;
+            width:  15;
+            height: 15;
+            text: "0";
+            fill_color: #FFFFFF;
+        }
+        label b_dir_0 {
+            x:195;
+            y:225;
+            width:  15;
+            height: 15;
+            text: ">";
+        }
+        label {
+            x:135;
+            y:225;
+            width:  35;
+            height: 15;
+            text: "XPB[0]";
+        }
+    }
+ 
+    // registers ----------------------------------------------------------------
+    reg<8> GPIOPADR;                    // port registers
+    reg<8> GPIOPBDR;
+    reg<8> GPIOPADDR;
+    reg<8> GPIOPBDDR;
+
+    reg<32> --addr;                       // APB buffers
+    reg<32> --data;
+
+    // trace --------------------------------------------------------------------
+    trace --trace_debug {
+        name: "DEBUG";
+        desc: "Prints debug information. For debuging only.";
+    }
+    trace --trace_2 {
+        name: "Trace 2";
+        desc: "Print action flow";
+    }
+
+    // behavior -----------------------------------------------------------------
+    init {
+        GPIOPADR = 0;
+        GPIOPBDR = 0;
+        GPIOPADDR = 0;                      // power-on-default A: in
+        GPIOPBDDR = 0;                      // power-on-default B: out
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// Port read/write functions
+    ////////////////////////////////////////////////////////////
+    
+    // SET direction by GPIOPXDDR and WRITE data to pins from GPIOPXDR
+
+    function void set_write_XPA () {           // XPA: DDR = 1:: out
+        if(GPIOPADDR[0] == 1) {
+            XPA0 = GPIOPADR[0];
+        } else {
+            disable XPA0;
+        }
+        if(GPIOPADDR[1] == 1) {
+            XPA1 = GPIOPADR[1];
+        } else {
+            disable XPA1;
+        }
+        if(GPIOPADDR[2] == 1) {
+            XPA2 = GPIOPADR[2];
+        } else {
+            disable XPA2;
+        }
+        if(GPIOPADDR[3] == 1) {
+            XPA3 = GPIOPADR[3];
+        } else {
+            disable XPA3;
+        }
+        if(GPIOPADDR[4] == 1) {
+            XPA4 = GPIOPADR[4];
+        } else {
+            disable XPA4;
+        }
+        if(GPIOPADDR[5] == 1) {
+            XPA5 = GPIOPADR[5];
+        } else {
+            disable XPA5;
+        }
+        if(GPIOPADDR[6] == 1) {
+            XPA6 = GPIOPADR[6];
+        } else {
+            disable XPA6;
+        }
+        if(GPIOPADDR[7] == 1) {
+            XPA7 = GPIOPADR[7];
+        } else {
+            disable XPA7;
+        }
+        // qqq zašto je ovo pod komentarom, a za B (funkcija ispod) nije pod komentarom
+        //portA.text  = sprintf("%09 4b", GPIOPADR); 
+        //a_data.text = sprintf("%09 4b", GPIOPADR);
+        return;
+    }
+
+    function void set_write_XPB () {           // XPB: DDR = 0 :: out
+        if(GPIOPBDDR[0] == 0) {
+            XPB0 = GPIOPBDR[0];
+        } else {
+            disable XPB0;
+        }
+        if(GPIOPBDDR[1] == 0) {
+            XPB1 = GPIOPBDR[1];
+        } else {
+            disable XPB1;
+        }
+        if(GPIOPBDDR[2] == 0) {
+            XPB2 = GPIOPBDR[2];
+        } else {
+            disable XPB2;
+        }
+        if(GPIOPBDDR[3] == 0) {
+            XPB3 = GPIOPBDR[3];
+        } else {
+            disable XPB3;
+        }
+        if(GPIOPBDDR[4] == 0) {
+            XPB4 = GPIOPBDR[4];
+        } else {
+            disable XPB4;
+        }
+        if(GPIOPBDDR[5] == 0) {
+            XPB5 = GPIOPBDR[5];
+        } else {
+            disable XPB5;
+        }
+        if(GPIOPBDDR[6] == 0) {
+            XPB6 = GPIOPBDR[6];
+        } else {
+            disable XPB6;
+        }
+        if(GPIOPBDDR[7] == 0) {
+         XPB7 = GPIOPBDR[7];
+        }   else {
+            disable XPB7;
+        }
+        portB.text  = sprintf("%09 4b", GPIOPBDR);
+        b_data.text = sprintf("%09 4b", GPIOPBDR);
+        return;
+    }
+
+    // READ data from pins to PXDR
+    function void read_XPA () {               // XPA: DDR = 0: in
+        if(GPIOPADDR[0] == 0) {
+            GPIOPADR[0] = XPA0;
+        }
+        if(GPIOPADDR[1] == 0) {
+            GPIOPADR[1] = XPA1;
+        }
+        if(GPIOPADDR[2] == 0) {
+            GPIOPADR[2] = XPA2;
+        }
+        if(GPIOPADDR[3] == 0) {
+            GPIOPADR[3] = XPA3;
+        }
+        if(GPIOPADDR[4] == 0) {
+            GPIOPADR[4] = XPA4;
+        }
+        if(GPIOPADDR[5] == 0) {
+            GPIOPADR[5] = XPA5;
+        }
+        if(GPIOPADDR[6] == 0) {
+            GPIOPADR[6] = XPA6;
+        }
+        if(GPIOPADDR[7] == 0) {
+            GPIOPADR[7] = XPA7;
+        }
+        // qqq zašto je ovo pod komentarom, a za B (funkcija ispod) nije pod komentarom
+        //portA.text  = sprintf("%09 4b", GPIOPADR);
+        //a_data.text = sprintf("%09 4b", GPIOPADR);
+        return;
+    }
+
+    function void read_XPB () {               // XPB: DDR = 1; in
+        if(GPIOPBDDR[0] == 1) {
+            GPIOPBDR[0] = XPB0;
+        }
+        if(GPIOPBDDR[1] == 1) {
+            GPIOPBDR[1] = XPB1;
+        }
+        if(GPIOPBDDR[2] == 1) {
+            GPIOPBDR[2] = XPB2;
+        }
+        if(GPIOPBDDR[3] == 1) {
+            GPIOPBDR[3] = XPB3;
+        }
+        if(GPIOPBDDR[4] == 1) {
+            GPIOPBDR[4] = XPB4;
+        }
+        if(GPIOPBDDR[5] == 1) {
+            GPIOPBDR[5] = XPB5;
+        }
+        if(GPIOPBDDR[6] == 1) {
+            GPIOPBDR[6] = XPB6;
+        }
+        if(GPIOPBDDR[7] == 1) {
+            GPIOPBDR[7] = XPB7;
+        }
+        portB.text  = sprintf("%09 4b", GPIOPBDR);
+        b_data.text = sprintf("%09 4b", GPIOPBDR);
+        return;
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// Animation functions
+    ////////////////////////////////////////////////////////////
+    
+    function void animate_a_pins_data() 
+    {    
+        var bits<32> p0;
+        var bits<32> p1;
+        var bits<32> p2;
+        var bits<32> p3;
+        var bits<32> p4;
+        var bits<32> p5;
+        var bits<32> p6;
+        var bits<32> p7;
+        
+        if( GPIOPADDR[0] ) {
+            p0 = 48#<32>+GPIOPADR[0];
+        } else {
+            if( in_high_Z(XPA0) )
+                p0 = 122#<32>; // malo z
+            else
+                p0 = 48#<32>+XPA0;
+        }
+        a_data_0.text = sprintf("%c", p0);
+
+        if( GPIOPADDR[1] ) {
+            p1 = 48#<32>+GPIOPADR[1];
+        } else {
+            if( in_high_Z(XPA1) )
+                p1 = 122#<32>;
+            else
+                p1 = 48#<32>+XPA1;
+        }
+        a_data_1.text = sprintf("%c", p1);
+
+        if( GPIOPADDR[2] ) {
+            p2 = 48#<32>+GPIOPADR[2];
+        } else {
+            if( in_high_Z(XPA2) )
+                p2 = 122#<32>;
+            else
+                p2 = 48#<32>+XPA2;
+        }
+        a_data_2.text = sprintf("%c", p2);
+
+        if( GPIOPADDR[3] ) {
+            p3 = 48#<32>+GPIOPADR[3];
+        } else {
+            if( in_high_Z(XPA3) )
+                p3 = 122#<32>;
+            else
+                p3 = 48#<32>+XPA3;
+        }
+        a_data_3.text = sprintf("%c", p3);
+
+        if( GPIOPADDR[4] ) {
+            p4 = 48#<32>+GPIOPADR[4];
+        } else {
+            if( in_high_Z(XPA4) )
+                p4 = 122#<32>;
+            else
+                p4 = 48#<32>+XPA4;
+        }
+        a_data_4.text = sprintf("%c", p4);
+
+        if( GPIOPADDR[5] ) {
+            p5 = 48#<32>+GPIOPADR[5];
+        } else {
+            if( in_high_Z(XPA5) )
+                p5 = 122#<32>;
+            else
+                p5 = 48#<32>+XPA5;
+        }
+        a_data_5.text = sprintf("%c", p5);
+        
+        if( GPIOPADDR[6] ) {
+            p6 = 48#<32>+GPIOPADR[6];
+        } else {
+            if( in_high_Z(XPA6) )
+                p6 = 122#<32>;
+            else
+                p6 = 48#<32>+XPA6;
+        }
+        a_data_6.text = sprintf("%c", p6);        
+ 
+        if( GPIOPADDR[7] ) {
+            p7 = 48#<32>+GPIOPADR[7];
+        } else {
+            if( in_high_Z(XPA7) )
+                p7 = 122#<32>;
+            else
+                p7 = 48#<32>+XPA7;
+        }
+        a_data_7.text = sprintf("%c", p7);
+        
+        portA.text  = sprintf("%c%c%c%c%c%c%c%c", p7, p6, p5, p4, p3, p2, p1, p0);
+        a_data.text = sprintf("%c%c%c%c%c%c%c%c", p7, p6, p5, p4, p3, p2, p1, p0);
+    }
+    
+    
+    function void animate_a_pins_dir() 
+    {
+        a_dir.text = sprintf("%09 4b", GPIOPADDR);
+        if( GPIOPADDR[0] ) {
+            a_dir_0.text = ">";
+        } else {
+            a_dir_0.text = "<";
+        }
+            
+        if( GPIOPADDR[1] ) {
+            a_dir_1.text = ">";
+        } else {
+            a_dir_1.text = "<";
+        }
+
+        if( GPIOPADDR[2] ) {
+            a_dir_2.text = ">";
+        } else {
+            a_dir_2.text = "<";
+        }
+
+        if( GPIOPADDR[3] ) {
+            a_dir_3.text = ">";
+        } else {
+            a_dir_3.text = "<";
+        }
+
+        if( GPIOPADDR[4] ) {
+            a_dir_4.text = ">";
+        } else {
+            a_dir_4.text = "<";
+        }
+
+        if( GPIOPADDR[5] ) {
+            a_dir_5.text = ">";
+        } else {
+            a_dir_5.text = "<";
+        }
+
+        if( GPIOPADDR[6] ) {
+            a_dir_6.text = ">";
+        } else {
+            a_dir_6.text = "<";
+        }
+
+        if( GPIOPADDR[7] ) {
+            a_dir_7.text = ">";
+        } else {
+            a_dir_7.text = "<";
+        }
+    }
+
+
+    function void animate_b_pins_data() 
+    {
+        var bits<32> p0;
+        var bits<32> p1;
+        var bits<32> p2;
+        var bits<32> p3;
+        var bits<32> p4;
+        var bits<32> p5;
+        var bits<32> p6;
+        var bits<32> p7;
+
+        if( ! GPIOPBDDR[0] ) {
+            p0 = 48#<32>+GPIOPBDR[0];
+        } else {
+            if( in_high_Z(XPB0) )
+                p0 = 122#<32>;
+            else
+                p0 = 48#<32>+XPB0;
+        }
+        b_data_0.text = sprintf("%c", p0);
+
+        if( ! GPIOPBDDR[1] ) {
+            p1 = 48#<32>+GPIOPBDR[1];
+        } else {
+            if( in_high_Z(XPB1) )
+                p1 = 122#<32>;
+            else
+                p1 = 48#<32>+XPB1;
+        }
+        b_data_1.text = sprintf("%c", p1);
+
+        if( ! GPIOPBDDR[2] ) {
+            p2 = 48#<32>+GPIOPBDR[2];
+        } else {
+            if( in_high_Z(XPB2) )
+                p2 = 122#<32>;
+            else
+                p2 = 48#<32>+XPB2;
+        }
+        b_data_2.text = sprintf("%c", p2);
+
+        if( ! GPIOPBDDR[3] ) {
+            p3 = 48#<32>+GPIOPBDR[3];
+        } else {
+            if( in_high_Z(XPB3) )
+                p3 = 122#<32>;
+            else
+                p3 = 48#<32>+XPB3;
+        }
+        b_data_3.text = sprintf("%c", p3);
+
+        if( ! GPIOPBDDR[4] ) {
+            p4 = 48#<32>+GPIOPBDR[4];
+        } else {
+            if( in_high_Z(XPB4) )
+                p4 = 122;
+            else
+                p4 = 48#<32>+XPB4;
+        }
+        b_data_4.text = sprintf("%c", p4);
+
+        if( ! GPIOPBDDR[5] ) {
+            p5 = 48#<32>+GPIOPBDR[5];
+        } else {
+            if( in_high_Z(XPB5) )
+                p5 = 122#<32>;
+            else
+                p5 = 48#<32>+XPB5;
+        }
+        b_data_5.text = sprintf("%c", p5);
+        
+        if( ! GPIOPBDDR[6] ) {
+            p6 = 48#<32>+GPIOPBDR[6];
+        } else {
+            if( in_high_Z(XPB6) )
+                p6 = 122#<32>;
+            else
+                p6 = 48#<32>+XPB6;
+        }
+        b_data_6.text = sprintf("%c", p6);
+  
+        if( ! GPIOPBDDR[7] ) {
+            p7 = 48#<32>+GPIOPBDR[7];
+        } else {
+            if( in_high_Z(XPB7) )
+                p7 = 122#<32>;
+            else
+                p7 = 48#<32>+XPB7;
+        }
+        b_data_7.text = sprintf("%c", p7);
+        
+        portB.text  = sprintf("%c%c%c%c%c%c%c%c", p7, p6, p5, p4, p3, p2, p1, p0);
+        b_data.text = sprintf("%c%c%c%c%c%c%c%c", p7, p6, p5, p4, p3, p2, p1, p0);
+    }
+    
+    
+    function void animate_b_pins_dir() 
+    {
+        b_dir.text = sprintf("%09 4b", GPIOPBDDR);
+        if( ! GPIOPBDDR[0] ) {
+            b_dir_0.text = ">";
+        } else {
+            b_dir_0.text = "<";
+        }
+            
+        if( ! GPIOPBDDR[1] ) {
+            b_dir_1.text = ">";
+        } else {
+            b_dir_1.text = "<";
+        }
+
+        if( ! GPIOPBDDR[2] ) {
+            b_dir_2.text = ">";
+        } else {
+            b_dir_2.text = "<";
+        }
+
+        if( ! GPIOPBDDR[3] ) {
+            b_dir_3.text = ">";
+        } else {
+            b_dir_3.text = "<";
+        }
+
+        if( ! GPIOPBDDR[4] ) {
+            b_dir_4.text = ">";
+        } else {
+            b_dir_4.text = "<";
+        }
+
+        if( ! GPIOPBDDR[5] ) {
+            b_dir_5.text = ">";
+        } else {
+            b_dir_5.text = "<";
+        }
+
+        if( ! GPIOPBDDR[6] ) {
+            b_dir_6.text = ">";
+        } else {
+            b_dir_6.text = "<";
+        }
+
+        if( ! GPIOPBDDR[7] ) {
+            b_dir_7.text = ">";
+        } else {
+            b_dir_7.text = "<";
+        }
+    }
+    
+    
+    ////////////////////////////////////////////////////////////
+    /// GPIO behavior
+    ////////////////////////////////////////////////////////////
+    
+    process {
+        init {
+            var bits<32> retval;
+            
+            // initial write to, and direction setting for pins
+
+            //set_write_XPA();                   // input port, nothing will be written
+            // Line above is put under comment because of function call.
+            // The function body is copy-pasted below.
+            if(GPIOPADDR[0] == 1) { // qqq uvijek ce direction biti nula pa se nista nece pisati, jer ce sve biti ulazno
+                XPA0 = GPIOPADR[0];
+            }
+            if(GPIOPADDR[1] == 1) {
+                XPA1 = GPIOPADR[1];
+            }
+            if(GPIOPADDR[2] == 1) {
+                XPA2 = GPIOPADR[2];
+            }
+            if(GPIOPADDR[3] == 1) {
+                XPA3 = GPIOPADR[3];
+            }
+            if(GPIOPADDR[4] == 1) {
+                XPA4 = GPIOPADR[4];
+            }
+            if(GPIOPADDR[5] == 1) {
+                XPA5 = GPIOPADR[5];
+            }
+            if(GPIOPADDR[6] == 1) {
+                XPA6 = GPIOPADR[6];
+            }
+            if(GPIOPADDR[7] == 1) {
+                XPA7 = GPIOPADR[7];
+            }
+
+            //set_write_XPB();                   // XPB DR is set to 0, so XPB[7:0] = 0!
+            // Line above is put under comment because of function call.
+            // The function body is copy-pasted below.
+
+            if(GPIOPBDDR[0] == 0) { // qqq uvijek ce direction biti nula pa ce se uvijek pisati i to uvijek nula
+                XPB0 = GPIOPBDR[0];
+            }
+            if(GPIOPBDDR[1] == 0) {
+                XPB1 = GPIOPBDR[1];
+            }
+            if(GPIOPBDDR[2] == 0) {
+                XPB2 = GPIOPBDR[2];
+            }
+            if(GPIOPBDDR[3] == 0) {
+                XPB3 = GPIOPBDR[3];
+            }
+            if(GPIOPBDDR[4] == 0) {
+                XPB4 = GPIOPBDR[4];
+            }
+            if(GPIOPBDDR[5] == 0) {
+                XPB5 = GPIOPBDR[5];
+            }
+            if(GPIOPBDDR[6] == 0) {
+                XPB6 = GPIOPBDR[6];
+            }
+            if(GPIOPBDDR[7] == 0) {
+                XPB7 = GPIOPBDR[7];
+            }
+        } // end process init
+
+        // [1] (clock high) - wait for selection (occures on clock high)
+        wait rise(SEL);
+        if (trace_debug) println "GPIO: PSEL rised, GPIO awake on APB...";
+			
+        
+		addr = ADDR;
+        if (WRITE == 1) {                // CPU would like to write to us...
+            data = DATA;
+            if (trace_debug) println "GPIO: Writing ", data, " on address ", addr;
+            
+            switch (addr[7:8]) {             // writing into which GPIO register?
+            case 0x00:                 // GPIO PA DR
+                GPIOPADR = data;
+                if (trace_2) {
+                    printf("GPIO: Pisanje podataka na port A: GPIOPADR = 0x%02H\n", GPIOPADR);
+                }
+                set_write_XPA();
+                break;
+                
+            case 0x04:                 // GPIO PB DR
+                GPIOPBDR = data;
+                if (trace_2) {
+                    printf("GPIO: Pisanje podataka na port B: GPIOPBDR = 0x%02H\n", GPIOPBDR);
+                }
+                set_write_XPB();
+                break;
+                
+            case 0x08:                 // GPIO PA DDR
+                GPIOPADDR = data;
+                
+                animate_a_pins_dir();
+                animate_a_pins_data();
+                
+                if (trace_2) {
+                    printf("GPIO: Pisanje u registar smjera porta A: GPIOPADDR = 0x%02H\n", GPIOPADDR);
+                }
+                set_write_XPA();
+                break;
+                
+            case 0x0C:                 // GPIO PB DDR
+                GPIOPBDDR = data;
+                
+                animate_b_pins_dir();
+                animate_b_pins_data();
+                
+                if (trace_2) {
+                    printf("GPIO: Pisanje u registar smjera porta B: GPIOPBDDR = 0x%02H\n", GPIOPBDDR);
+                }
+                set_write_XPB();
+                break;
+                
+            default:                      // unknown register!!!! wrong adress!
+                //print "[EXCEPTION on component: GPIO] --> ";
+                //println "Greska u programu!";
+                //println "Pristup rezerviranom dijelu vanjske jedinice.";
+                //printf ("Trazena adresa: 0x%02H; Dozvoljene adrese:\n", addr[7:8]);
+                //println "GPIOPADR:  0x00\nGPIOPBDR:  0x04";
+                //println "GPIOPADDR: 0x08\nGPIOPBDDR: 0x0C";
+                retval = popup_error ( "Greška u komponenti GPIO",
+                               "Upis u GPIO-sklop na nedefiniranu adresu.\nDozvoljene adrese su bazna_adresa+(0,4,8,12).",
+                               "Ok");
+                error;
+            }
+            //DONE, data written to I/O pins!
+
+            if (trace_debug) println "GPIO: write completed, ports refreshed!";
+
+        } else {                            // CPU would like to read from us...
+            if (trace_debug) println "GPIO: reading from address ", addr;
+            switch (addr[7:8]) {             // reading from which GPIO register?
+            case 0x00:                 // GPIO PA DR
+                read_XPA();
+                if (trace_2) {
+                    printf("GPIO: Citanje podataka s porta A: GPIOPADR = 0x%02H\n", GPIOPADR);
+                }
+                data #= GPIOPADR;
+                break;
+            case 0x04:                 // GPIO PB DR
+                read_XPB();
+                if (trace_2) {
+                    printf("GPIO: Citanje podataka s porta B: GPIOPBDR = 0x%02H\n", GPIOPBDR);
+                }
+                data #= GPIOPBDR;
+                break;
+            case 0x08:                 // GPIO PA DDR
+                if (trace_2) {
+                    printf("GPIO: Citanje registra smjera porta A: GPIOPADDR = 0x%02H\n", GPIOPADDR);
+                }
+                data #= GPIOPADDR;
+                break;
+            case 0x0C:                 // GPIO PB DDR
+                if (trace_2) {
+                    printf("GPIO: Citanje registra smjera porta B: GPIOPBDDR = 0x%02H\n", GPIOPBDDR);
+                }
+                data #= GPIOPBDDR;
+                break;
+            default:                      // unknown register!!!! wrong adress!
+                //print "[EXCEPTION on component: GPIO] --> ";
+                //println "Greska u programu!";
+                //println "Pristup rezerviranom dijelu vanjske jedinice.";
+                //printf ("Trazena adresa: 0x%02H; Dozvoljene adrese:\n", addr[7:8]);
+                //println "GPIOPADR:  0x00\nGPIOPBDR:  0x04";
+                //println "GPIOPADDR: 0x08\nGPIOPBDDR: 0x0C";
+                retval = popup_error ( "Greška u komponenti GPIO",
+                               "Čitanje iz GPIO-sklopa s nedefinirane adrese.\nDozvoljene adrese su bazna_adresa+(0,4,8,12).",
+                               "Ok");
+                error;
+            }
+            //write data to APB bus
+            DATA = data;
+            if (trace_debug) println "GPIO: read from ", addr, ": ", data, ". Written to APB";
+        }
+        // [3] (clock high) No matter WRITING or READING, disable DATA!
+        wait fall(SEL);
+        disable DATA;
+        if (trace_debug) println "GPIO: PENABLE down, disconnecting from APB (DATA)";
+    } // end process
+    
+    process {
+        animate_a_pins_data();
+        animate_b_pins_data();
+        delay 1 clock / 2;
+    }
+}

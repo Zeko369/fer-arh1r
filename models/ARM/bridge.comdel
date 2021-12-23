@@ -1,0 +1,224 @@
+component Bridge (in<32> HADDR, out<32> HRDATA, in<32> HWDATA,          // AHB side
+                  in<3> HSIZE, in HWRITE, out HREADY, in HSEL,
+                  
+                  out<32> PADDR, in<32> PRDATA, out<32> PWDATA,         // APB side
+                  out<3> PSIZE, out PENABLE, out PWRITE, 
+                  out PSEL_GPIO_1, out PSEL_GPIO_2, 
+                  out PSEL_RTC, out PSEL_UI_IN, out PSEL_UI_OUT,
+                  
+                  // next 5 pins are used only for detection of addressing of nonexistent UI unit
+                  in GPIO_1_connected, in GPIO_2_connected, 
+                  in RTC_connected, in UI_IN_connected, in UI_OUT_connected)
+{
+    // presentation -------------------------------------------------------------
+    external display {
+        rectangle lbl {
+            x: 0;
+            y: 0;
+            width: 40;
+            height: 80;
+            fill_color: #FFFFFF;
+            text: "Bridge";
+        }
+    }
+
+       // trace --------------------------------------------------------------------
+   trace --trace_debug {
+      name: "DEBUG";
+      desc: "Prints debug information. For debuging only.";
+   }
+   
+    // registers ----------------------------------------------------------------
+    reg<32> --addr;
+    reg<32> --data;
+    reg --write;
+    reg<3> --size;
+
+    // behavior -----------------------------------------------------------------
+
+    nonsync function activate_PSEL (bits<32> address) 
+    {
+        var bits<32> retval;
+    
+        switch # (address[8..15]) {      // 0x FFFF ??XX - ?? determines the IO-unit
+            case 0x0F: {   // 0x FF FF 0F XX :: GPIO 1
+                if( GPIO_1_connected == 0 ) {
+                    println "Greska u programu!";
+                    println "Pristup dijelu adresnog prostora namijenjenog jedinici GPIO 1.";
+                    printf ("Zatrazena je adresa: 0x%08H: ", address);
+                    println "Adresirana je jedinica GPIO 1 koji ne postoji u ovom sustavu.";
+                    retval = popup_error ( "Greška u adresiranju",
+                           "Adresiran je GPIO 1 koji ne postoji u ovom sustavu.\nVidi konzolu za detaljniju poruku.",
+                           "Ok");
+                    error;
+                }
+                PSEL_GPIO_1 = 1;
+                break;
+            }
+            case 0x0B: {   // 0x FF FF 0B XX :: GPIO 2
+                if( GPIO_2_connected == 0 ) {
+                    println "Greska u programu!";
+                    println "Pristup dijelu adresnog prostora namijenjenog jedinici GPIO 2.";
+                    printf ("Zatrazena je adresa: 0x%08H: ", address);
+                    println "Adresirana je jedinica GPIO 2 koji ne postoji u ovom sustavu.";
+                    retval = popup_error ( "Greška u adresiranju",
+                           "Adresiran je GPIO 2 koji ne postoji u ovom sustavu.\nVidi konzolu za detaljniju poruku.",
+                           "Ok");
+                    error;
+                }
+                PSEL_GPIO_2 = 1;
+                break;
+            }
+            case 0x0E: {   // 0x FF FF 0E XX :: RTC
+                if( RTC_connected == 0 ) {
+                    println "Greska u programu!";
+                    println "Pristup dijelu adresnog prostora namijenjenog jedinici RTC.";
+                    printf ("Zatrazena je adresa: 0x%08H: ", address);
+                    println "Adresirana je jedinica RTC koji ne postoji u ovom sustavu.";
+                    retval = popup_error ( "Greška u adresiranju",
+                           "Adresiran je RTC koji ne postoji u ovom sustavu.\nVidi konzolu za detaljniju poruku.",
+                           "Ok");
+                    error;
+                }
+                PSEL_RTC = 1; 
+                break;    
+            }
+            case 0x0D: {  // 0x FF FF 0D XX :: UI_IN
+                if( UI_IN_connected == 0 ) {
+                    println "Greska u programu!";
+                    println "Pristup dijelu adresnog prostora namijenjenog jedinici UI_IN.";
+                    printf ("Zatrazena je adresa: 0x%08H: ", address);
+                    println "Adresirana je jedinica UI_IN koji ne postoji u ovom sustavu.";
+                    retval = popup_error ( "Greška u adresiranju",
+                           "Adresirana je jedinica UI_IN koja ne postoji u ovom sustavu.\nVidi konzolu za detaljniju poruku.",
+                           "Ok");
+                    error;
+                }
+                PSEL_UI_IN = 1;
+                break;
+            }
+            case 0x0C: {  // 0x FF FF 0C XX :: UI_OUT
+                if( UI_OUT_connected == 0 ) {
+                    println "Greska u programu!";
+                    println "Pristup dijelu adresnog prostora namijenjenog jedinici UI_OUT.";
+                    printf ("Zatrazena je adresa: 0x%08H: ", address);
+                    println "Adresirana je jedinica UI_OUT koji ne postoji u ovom sustavu.";
+                    retval = popup_error ( "Greška u adresiranju",
+                           "Adresirana je jedinica UI_OUT koja ne postoji u ovom sustavu.\nVidi konzolu za detaljniju poruku.",
+                           "Ok");
+                    error;
+                }
+                PSEL_UI_OUT = 1;
+                break;
+            }
+            default:                // if decoder routes to here with other address
+                //print "\n[EXCEPTION in component: Bridge] --> ";
+                println "Greska u programu!";
+                println "Pristup nepostojecoj vanjskoj jedinici.";
+                printf( "Zatrazena je ilegalna adresa: 0x%08H\n", address );
+                println "Dozvoljene adrese su: ";
+                println "    0x FFFF 0FXX (GPIO 1)";
+                println "    0x FFFF 0BXX (GPIO 2)";
+                println "    0x FFFF 0EXX (RTC)";
+                println "    0x FFFF 0DXX (input UI-unit)";
+                println "    0x FFFF 0CXX (output UI-unit)";
+                retval = popup_error ( "Greška u komponenti bridge",
+                               "Pristup nepostojecoj vanjskoj jedinici.\nVidi konzolu za detaljniju poruku.",
+                               "Ok");
+                error;
+        }    
+    }
+
+
+    process {
+        init {
+            PSEL_GPIO_1 = 0;
+            PSEL_GPIO_2 = 0;
+            PSEL_RTC = 0;
+            PSEL_UI_IN = 0;
+            PSEL_UI_OUT = 0;
+            PENABLE = 0;
+            HREADY = 0;
+        }
+
+        // [1] (clock high) - wait for selection (occures on clock high)
+        wait rise(HSEL);              // bridge is selected
+        if (trace_debug) println "BRIDGE: AHB session OPEN....";
+
+        // [1] clock low - read and store address and signals from bus, and decide
+        on_low (clock);
+        addr = HADDR;
+        write = HWRITE;
+        size = HSIZE;
+        if (write == 1) {             // writing to IO unit (4 clock cycles)
+            // [2] clock high - activate HREADY to proceed with AHB write
+            if (trace_debug) println "BRIDGE:... for WRITING to ext. unit.";
+            on_high (clock);
+            if (trace_debug) println "BRIDGE: high, HREADY = 1";
+            HREADY = 1;                // 0 -> 1
+
+            // [2] clock low - receiving HWRITE data
+            on_low (clock);
+            if (trace_debug) println "BRIDGE: low, reading data from AHB";
+            data = HWDATA;
+
+            // [3] clock rise - Done with AHB read. Now write to APB!
+            on_rise(clock);
+            if (trace_debug) println "BRIDGE: AHB session CLOSED, data active on APB";
+
+            HREADY = 0;
+
+            PADDR = addr;
+            PWDATA = data;
+            PSIZE = size;
+            PWRITE = 1;
+            activate_PSEL(addr);
+
+            // [4] clock rise - activate IO units
+            on_fall(clock); // skip to next rise(clock)
+            on_rise(clock);
+            if (trace_debug) println "BRIDGE: high, APB: PENABLE = 1";
+            PENABLE = 1;
+
+            // [5] clock rise - DONE!
+            on_fall(clock); /// BUG? prevention
+            on_rise(clock);
+            if (trace_debug) println "BRIDGE: high APB: PENABLE = 0, disconnect from APB";
+
+        } else {                      // reading from ext. unit (3 clock cycles)
+            if (trace_debug) println "BRIDGE:... for READING from ext. unit.";
+
+            // [2] clock rise - read adress and co.
+            on_rise(clock);
+            PADDR = addr;
+            PSIZE = size;
+            PWRITE = 0;
+            activate_PSEL(addr);
+
+            // [3] clock rise - activate I/O units, signal HREADY to ARM
+            on_fall(clock); // skip to next rise(clock)
+            on_rise(clock);
+            PENABLE = 1;
+            HREADY = 1;
+            
+            on_high (clock);
+
+            // [3] clock fall - Transfer data from APB to AHB!
+            on_fall(clock);
+            HRDATA = PRDATA;
+            if (trace_debug) println "BRIDGE: APB -> AHB data ready for reading";
+
+            // [4] clock rise - DONE!
+            on_rise(clock);
+            disable HRDATA;
+            HREADY = 0;
+        }
+        
+        PSEL_GPIO_1 = 0;
+        PSEL_GPIO_2 = 0;
+        PSEL_RTC = 0;
+        PSEL_UI_IN = 0;
+        PSEL_UI_OUT = 0;
+        PENABLE = 0;
+    }
+}

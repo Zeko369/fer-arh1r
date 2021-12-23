@@ -1,0 +1,190 @@
+set load_performs_init;
+
+#include "components/memory.comdel"
+#include "components/processor.comdel"
+#include "components/decoder.comdel"
+#include "components/gpio_io.comdel"
+#include "components/rtc.comdel"
+#include "components/temperature.comdel"
+#include "components/lcd8.comdel"
+#include "components/led.comdel"
+#include "components/pushbutton.comdel"
+#include "components/togglebutton.comdel"
+
+component System
+{
+	clock 1 MHz;
+	
+	wire<32> addr;
+	wire<32> data;
+	wire<2> size;
+	wire write;
+	wire sel;
+	wired_or wait_sig;
+	wired_or eintr;
+	wired_or tintr;
+	
+	wire --sel_mem;
+	wire --sel_rtc;
+	wire --sel_gpio0;
+	wire --sel_gpio1;
+	
+	wire --pa0_0;
+	wire --pa0_1;
+	wire --pa0_2;
+	wire --pa0_3;
+	wire --pa0_4;
+	wire --pa0_5;
+	wire --pa0_6;
+	wire --pa0_7;
+	
+	wire --pb0_0;
+	wire --pb0_1;
+	wire --pb0_2;
+	wire --pb0_3;
+	wire --pb0_4;
+	wire --pb0_5;
+	wire --pb0_6;
+	wire --pb0_7;
+	
+	wire --pa1_0;
+	wire --pa1_1;
+	wire --pa1_2;
+	wire --pa1_3;
+	wire --pa1_4;
+	wire --pa1_5;
+	wire --pa1_6;
+	wire --pa1_7;
+	
+	wire --pb1_0;
+	wire --pb1_1;
+	wire --pb1_2;
+	wire --pb1_3;
+	wire --pb1_4;
+	wire --pb1_5;
+	wire --pb1_6;
+	wire --pb1_7;
+	
+	wired_or --floating;   // unused inout of GPIOs (to avoid warnings)
+	
+	subcomponent Memory64KiB mem (addr, data, size, write, wait_sig, sel_mem);
+	subcomponent RV32I_processor proc (addr, data, size, write, sel, wait_sig, eintr, tintr) uses mem;
+	subcomponent Decoder dec (addr, sel, sel_mem, sel_rtc, sel_gpio0, sel_gpio1);
+	subcomponent GPIO_IO gpio0 <"GPIO 0"> (
+			addr, data, write, sel_gpio0,
+			pa0_0, pa0_1, pa0_2, pa0_3, pa0_4, pa0_5, pa0_6, pa0_7,
+			pb0_0, pb0_1, pb0_2, pb0_3, pb0_4, pb0_5, pb0_6, pb0_7);
+	subcomponent RTC rtc <1000> (addr, data, write, sel_rtc, tintr);
+	subcomponent Temperature temperature <400, 1000> (
+			pa0_0, pa0_1, pa0_2, pa0_3, pa0_4, pa0_5, pa0_6, pa0_7);
+	subcomponent LCD8 lcd (
+			pb0_0, pb0_1, pb0_2, pb0_3, pb0_4, pb0_5, pb0_6, pb0_7);
+	subcomponent GPIO_IO gpio1 <"GPIO 1"> (
+			addr, data, write, sel_gpio1,
+			pa1_0, pa1_1, floating,floating,floating, pa1_5, pa1_6, pa1_7,
+			floating,floating,floating,floating,floating,floating,floating,floating);
+	subcomponent pushbutton    --pshbtn (pa1_0);
+	subcomponent togglebutton  --tglbtn (pa1_1);
+	subcomponent led           --led_red <red>    (pa1_5);
+	subcomponent led           --led_ylw <yellow> (pa1_6);
+	subcomponent led           --led_grn <green>  (pa1_7);
+	
+	display {                                         
+		component { x:0; y:0; ref:"proc"; }
+		component { x:0; y:140; ref:"mem"; }
+		component { x:170; y:0; ref:"rtc"; }
+		component { x:170; y:105; ref:"gpio0"; }
+		component { x:170; y:215; ref:"gpio1"; }
+		component { x:270; y:105; ref:"temperature"; }
+		component { x:270; y:157; ref:"lcd"; }
+
+		// conection GPIO 1 to temp and LCD
+
+		rectangle temp_to_gpio {
+		x: 251; y: 120;
+		width: 18;
+		height: 10;
+		fill_color: light_gray;
+		line_color: light_gray;
+		}
+		
+		rectangle lcd_to_gpio {
+		x: 251; y: 180;
+		width: 18;
+		height: 10;
+		fill_color: light_gray;
+		line_color: light_gray;
+		}
+
+		// conection GPIO 2 to buttons and LEDs
+		
+		component { x: 251; y: 220; ref: "pshbtn"; }
+		component { x: 251; y: 250; ref: "tglbtn"; }
+
+		right_arrow {
+		x: 251; y: 285;
+		arrow_length: 10;
+		}
+		component { x: 261; y: 281; ref: "led_red"; }        
+		
+		right_arrow {
+		x: 251; y: 295;
+		arrow_length: 10;
+		}
+		component { x: 261; y: 291; ref: "led_ylw"; }
+		
+		right_arrow {
+		x: 251; y: 305;
+		arrow_length: 10;
+		}
+		component { x: 261; y: 301; ref: "led_grn"; }
+		
+		rectangle bus {
+			x: 130; y: 0;
+			width: 20;
+			height: 300;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+		
+		rectangle proc_to_bus {
+			x: 111; y: 50;
+			width: 19;
+			height: 10;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+		
+		rectangle mem_to_bus {
+			x: 81; y: 175;
+			width: 49;
+			height: 10;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+		
+		rectangle rtc_to_bus {
+			x: 150; y: 32;
+			width: 19;
+			height: 10;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+		
+		rectangle gpio0_to_bus {
+			x: 150; y: 150;
+			width: 19;
+			height: 10;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+		
+		rectangle gpio1_to_bus {
+			x: 150; y: 260;
+			width: 19;
+			height: 10;
+			line_color: light_gray;
+			fill_color: light_gray;
+		}
+	}
+}

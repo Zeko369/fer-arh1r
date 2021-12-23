@@ -1,0 +1,3172 @@
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+///
+/// qqq čitanja iz memorije daju poluriječi i bajtove koji su već poravnati na
+///     pravi položaj unutar 32 bita. jel to ok? mislim da nije.
+///     memorija je napravljena tako da poravnava, a to bi trebao raditi procesor.
+///     nije jako bitno jer vjerojatno nitko neće ići gledati podatkovnu sabirnicu.
+///
+/// qqq napravit makroe za bitove u IR-u, npr. za IWS__P: 
+/// macro preindex IR[24]==1
+/// macro postindex IR[24]==0
+///
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+//  pattern za pridruzivanje registru   R\[.*\] ?#?=[^=]
+
+processor ARM7tdmi (out<32> HADDR, in<32> HRDATA, out<32> HWDATA, out<3> HSIZE,
+                    out HWRITE, in HREADY, in IRQ, in FIQ, out nMREQ,
+                    in HBUSREQ, out HGRANT)
+{
+    /***************************************************************************\
+    *                                                                           *
+    *                              registers                                    *
+    *                                                                           *
+    \***************************************************************************/
+
+    reg[16]<32> R;                      // (logical, R0-R7 and R15 also physical)
+    reg<32>     CPSR;                   // CPSR (logical & physical)
+    
+    // used for animation of changes in corresponding registers
+    reg[16]<32> --R_changed;
+    reg<32>     --CPSR_changed; 
+
+    // The rest of the registers are hidden in System-hierarchy-tree in GUI
+    reg<32> --SPSR;                       // SPSR (logical, maped to SPSR_<mode>)
+    // banked (physical)
+    reg<32> --R8_allbutfiq;               // R8
+    reg<32> --R8_fiq;
+    reg<32> --R9_allbutfiq;               // R9
+    reg<32> --R9_fiq;
+    reg<32> --R10_allbutfiq;              // R10
+    reg<32> --R10_fiq;
+    reg<32> --R11_allbutfiq;              // R11
+    reg<32> --R11_fiq;
+    reg<32> --R12_allbutfiq;              // R12
+    reg<32> --R12_fiq;
+    reg<32> --R13_usr_sys;                // R13
+    reg<32> --R13_svc;
+    reg<32> --R13_abt;
+    reg<32> --R13_und;
+    reg<32> --R13_irq;
+    reg<32> --R13_fiq;
+    reg<32> --R14_usr_sys;                // R14
+    reg<32> --R14_svc;
+    reg<32> --R14_abt;
+    reg<32> --R14_und;
+    reg<32> --R14_irq;
+    reg<32> --R14_fiq;
+    reg<32> --SPSR_svc;                   // SPSR
+    reg<32> --SPSR_abt;
+    reg<32> --SPSR_und;
+    reg<32> --SPSR_irq;
+    reg<32> --SPSR_fiq;
+    // invisible registers
+    reg<32> --IR;                         // Instruction Register
+    reg<32> --AR;                         // Adress Register
+    reg<32> --MDIN;                       // Mem Data IN
+    reg<32> --MDOUT;                      // Mem Data OUT
+    reg<32> --prefetch;                   // prefetch (1) or data access (0)
+
+    //----------------------------------------- variables -----------------------
+    reg<32> --operand;                    // "acumulator", functions operand
+    reg<32> --base;                       // base address for LOAD/STORE instructions
+    reg --shifter_cout;                   // shifter carry out
+    reg<32> --offset;                     //
+    reg --word_flag;                      // (word, u.byte)  OR  (s.byte, u.-s.-halfword)
+
+    // instruction word segments
+    reg<4> --iws__opcode;                 //                                        opcode         data processing
+    reg --iws__S_p;                       // data processing S                      S              data processing
+    reg<4> --iws__Rn;                     // Rn                                     Rn
+    reg<4> --iws__Rd;                     // Rd                                     Rd
+    reg<4> --iws__Rm;                     // Rm                                     Rm
+    reg<4> --iws__Rs;                     // Rs                                     Rs
+    reg<32> --iws__shift_amount;          //                                        imm_shift
+    reg<2> --iws__shift;                  //                                        SH             data transfer
+    reg<4> --iws__rotate;                 //                                        imm_rot
+    reg<32> --iws__immediate8;            //                                        imm_8bit
+    reg<12> --iws__immediate12;           //                                        imm_12bit
+    reg --iws__R;                         // PSR data transfer: 1-SPSR / 0-CPSR     R              PSR transfer instructions
+    reg<4> --iws__mask;                   //                                        mask           PSR transfer instructions
+    reg --iws__imm_flag;                  // PSR data transfer: 1-imm / 0-register
+    reg<4> --iws__SBO;                    //                                        field          PSR transfer instructions
+    reg --iws__I;                         //
+    reg --iws__S_t;                       // Data transfer S
+
+    reg --iws__L_b;                       // Branch: Link
+    reg<16> --iws__register_list;         //
+    reg<24> --iws__immediate24;           // za SWI se moze koristiti, isto ko i za branch
+
+    //---------------------------- constants and aliases -----------------------
+    macro N_FLAG = CPSR[31];
+    macro Z_FLAG = CPSR[30];
+    macro C_FLAG = CPSR[29];
+    macro V_FLAG = CPSR[28];
+
+    macro CPSR_mode  = CPSR[0..4];
+    macro CPSR_IRQ   = CPSR[7];
+    macro CPSR_FIQ   = CPSR[6];
+    macro CPSR_thumb = CPSR[5];
+    
+    macro ENABLED  = 0;    // for interrupts
+    macro DISABLED = 1;
+    
+    macro ARM_state   = 0;
+    macro THUMB_state = 1;
+
+    macro USR_mode = 0b10000;   // User
+    macro SYS_mode = 0b11111;   // System
+    macro IRQ_mode = 0b10010;   // Interrupt
+    macro FIQ_mode = 0b10001;   // Fast Interrupt
+    macro UND_mode = 0b11011;   // Undefined
+    macro ABT_mode = 0b10111;   // Abort
+    macro SVC_mode = 0b10011;   // Supervisor
+
+
+
+    macro EQ_cond = 0;
+    macro NE_cond = 1;
+    macro CS_HS_cond = 2;
+    macro CC_LO_cond = 3;
+    macro MI_cond = 4;
+    macro PL_cond = 5;
+    macro VS_cond = 6;
+    macro VC_cond = 7;
+    macro HI_cond = 8;
+    macro LS_cond = 9;
+    macro GE_cond = 10;
+    macro LT_cond = 11;
+    macro GT_cond = 12;
+    macro LE_cond = 13;
+    macro ALWAYS_cond = 14;
+
+    macro AND_opcode =  0;
+    macro EOR_opcode =  1;
+    macro SUB_opcode =  2;
+    macro RSB_opcode =  3;
+    macro ADD_opcode =  4;
+    macro ADC_opcode =  5;
+    macro SBC_opcode =  6;
+    macro RSC_opcode =  7;
+    macro TST_opcode =  8;
+    macro TEQ_opcode =  9;
+    macro CMP_opcode = 10;
+    macro CMN_opcode = 11;
+    macro ORR_opcode = 12;
+    macro MOV_opcode = 13;
+    macro BIC_opcode = 14;
+    macro MVN_opcode = 15;
+
+    macro LSL_opcode =  0;
+    macro LSR_opcode =  1;
+    macro ASR_opcode =  2;
+    macro ROR_RRX_opcode =  3;
+
+    macro BYTE_size     = 0;
+    macro HALFWORD_size = 1;
+    macro WORD_size     = 2;
+    
+    // aliases for all instructions
+    
+    macro IR_cond = IR[28..31]; // condition filed
+    
+    // aliases for data transfer
+    macro IR_preindex  = IR[24]==1; // P-bit (pre/post indexing)
+    macro IR_postindex = IR[24]==0;
+
+    macro IR_plus  = IR[23]==1;  // U-bit (up/down)
+    macro IR_minus = IR[23]==0;
+
+    macro IR_byte   = IR[22]==1; // B-bit (byte/word)
+    
+    macro IR_write_back = IR[21]==1; // W-bit (write-back)
+    
+    macro IR_store = IR[20]==0;   // L-bit (load/store)
+    macro IR_load  = IR[20]==1;
+
+
+    
+    // colors for debugg-arrow
+    macro start_color = #555555;    // gray
+    macro true_color  = #77AB59;    // muted green
+    macro false_color = #AA5533;    // muted red
+    
+    // colors for animated registers
+    macro active_color = black;
+    macro inactive_color = light_gray;
+    
+    // inactive pins (during DMA-transfer)
+    macro very_light_gray  = #E5E5E5;
+    
+
+    /***************************************************************************\
+    *                                                                           *
+    *                             presentation objects                          *
+    *                                                                           *
+    \***************************************************************************/
+    external display {
+        rectangle lbl {
+            x:0;
+            y:0;
+            width: 110;
+            height: 110;
+            fill_color: white;
+            text: "ARM";
+        }
+        rectangle pins {
+            x: 50; y: 111;
+            width: 10;
+            height: 19;
+            fill_color: light_gray;
+            line_color: light_gray;
+        }
+        check_mark {
+            x:8; y:0;
+        }
+        plus_mark {
+            x:0; y:0;
+        }
+    }
+    display {
+
+        dbg_arrow debug_arrow {
+            arrow_color: start_color;
+            arrow_address: 0;
+            visible: false;
+        }
+
+        // -----------   Rectangles and labels as placeholders for   ---------
+        // ----------- displaying current values of registerts/flags ---------
+        // R0 - R7
+        rectangle r_R0  { x: 20; y: 0; width: 80; height: 20; }
+        rectangle r_R1  { x: 20; y: 20; width: 80; height: 20; }
+        rectangle r_R2  { x: 20; y: 40; width: 80; height: 20; }
+        rectangle r_R3  { x: 20; y: 60; width: 80; height: 20; }
+        rectangle r_R4  { x: 20; y: 80; width: 80; height: 20;  }
+        rectangle r_R5  { x: 20; y: 100; width: 80; height: 20; }
+        rectangle r_R6  { x: 20; y: 120; width: 80; height: 20; }
+        rectangle r_R7  { x: 20; y: 140; width: 80; height: 20; }
+
+        // R8 - R12
+        rectangle r_R8  { x: 130; y: 0; width: 80; height: 20; }
+        rectangle r_R9  { x: 130; y: 20; width: 80; height: 20; }
+        rectangle r_R10 { x: 130; y: 40; width: 80; height: 20; }
+        rectangle r_R11 { x: 130; y: 60; width: 80; height: 20; }
+        rectangle r_R12 { x: 130; y: 80; width: 80; height: 20; }
+        rectangle r_R8_fiq  { x: 530; y: 0; width: 80; height: 20; }
+        rectangle r_R9_fiq  { x: 530; y: 20; width: 80; height: 20; }
+        rectangle r_R10_fiq { x: 530; y: 40; width: 80; height: 20; }
+        rectangle r_R11_fiq { x: 530; y: 60; width: 80; height: 20; }
+        rectangle r_R12_fiq { x: 530; y: 80; width: 80; height: 20; }
+        // R13 - R14
+        rectangle r_R13 { x: 130; y: 100; width: 80; height: 20; }
+        rectangle r_R14 { x: 130; y: 120; width: 80; height: 20; }
+        rectangle r_R13_svc { x: 210; y: 100; width: 80; height: 20; }
+        rectangle r_R14_svc { x: 210; y: 120; width: 80; height: 20; }
+        rectangle r_R13_abt { x: 290; y: 100; width: 80; height: 20; }
+        rectangle r_R14_abt { x: 290; y: 120; width: 80; height: 20; }
+        rectangle r_R13_und { x: 370; y: 100; width: 80; height: 20; }
+        rectangle r_R14_und { x: 370; y: 120; width: 80; height: 20; }
+        rectangle r_R13_irq { x: 450; y: 100; width: 80; height: 20; }
+        rectangle r_R14_irq { x: 450; y: 120; width: 80; height: 20; }
+        rectangle r_R13_fiq { x: 530; y: 100; width: 80; height: 20; }
+        rectangle r_R14_fiq { x: 530; y: 120; width: 80; height: 20; }
+        // R15
+        rectangle r_R15 { x: 130; y: 140; width: 80; height: 20; }
+        
+        // CPSR        
+        label r_CPSR__NZCV  { x: 312; y: 20; width: 40;  height: 20; }
+        label r_CPSR__      { x: 350; y: 20; width: 50;  height: 20; text: "- - -"; }
+        label r_CPSR__IFT   { x: 400; y: 20; width: 30;  height: 20; }
+        label r_CPSR__M     { x: 430; y: 20; width: 50;  height: 20; }
+        
+        // All SPSRs
+        rectangle r_SPSR_svc { x: 210; y: 180; width: 80; height: 20;}
+        // qqq zašto se ove tri labele ne ispisuju kao tekst u rectangleu (za sve spsr-ove)?
+        label l_SPSR_svc_f { x: 214; y: 180; width: 27; height: 20;} // +4
+        label l_SPSR_svc_c { x: 244; y: 180; width: 19; height: 20;} // +30
+        label l_SPSR_svc_m { x: 268; y: 180; width: 19; height: 20;} // +24
+
+        rectangle r_SPSR_abt { x: 290; y: 180; width: 80; height: 20;}
+        label l_SPSR_abt_f { x: 294; y: 180; width: 27; height: 20;}
+        label l_SPSR_abt_c { x: 324; y: 180; width: 19; height: 20;}
+        label l_SPSR_abt_m { x: 348; y: 180; width: 19; height: 20;}
+
+        rectangle r_SPSR_und { x: 370; y: 180; width: 80; height: 20;}
+        label l_SPSR_und_f { x: 374; y: 180; width: 27; height: 20;}
+        label l_SPSR_und_c { x: 404; y: 180; width: 19; height: 20;}
+        label l_SPSR_und_m { x: 428; y: 180; width: 19; height: 20;}
+
+        rectangle r_SPSR_irq { x: 450; y: 180; width: 80; height: 20;}
+        label l_SPSR_irq_f { x: 454; y: 180; width: 27; height: 20;}
+        label l_SPSR_irq_c { x: 484; y: 180; width: 19; height: 20;}
+        label l_SPSR_irq_m { x: 508; y: 180; width: 19; height: 20;}
+
+        rectangle r_SPSR_fiq { x: 530; y: 180; width: 80; height: 20;}
+        label l_SPSR_fiq_f { x: 534; y: 180; width: 27; height: 20;}
+        label l_SPSR_fiq_c { x: 564; y: 180; width: 19; height: 20;}
+        label l_SPSR_fiq_m { x: 588; y: 180; width: 19; height: 20;}
+
+        // --------------------------- labels
+        // Names of R0-R15
+        label { x: 0;   y: 0;   width: 20; height: 20; text: "R0";  }
+        label { x: 0;   y: 20;  width: 20; height: 20; text: "R1";  }
+        label { x: 0;   y: 40;  width: 20; height: 20; text: "R2";  }
+        label { x: 0;   y: 60;  width: 20; height: 20; text: "R3";  }
+        label { x: 0;   y: 80;  width: 20; height: 20; text: "R4";  }
+        label { x: 0;   y: 100; width: 20; height: 20; text: "R5";  }
+        label { x: 0;   y: 120; width: 20; height: 20; text: "R6";  }
+        label { x: 0;   y: 140; width: 20; height: 20; text: "R7";  }
+        label { x: 110; y: 0;   width: 20; height: 20; text: "R8";  }
+        label { x: 110; y: 20;  width: 20; height: 20; text: "R9";  }
+        label { x: 107;  y: 40;  width: 20; height: 20; text: "R10"; }
+        label { x: 107;  y: 60;  width: 20; height: 20; text: "R11"; }
+        label { x: 107;  y: 80;  width: 20; height: 20; text: "R12"; }
+        label { x: 107;  y: 100; width: 20; height: 20; text: "R13"; }
+        label { x: 107;  y: 120; width: 20; height: 20; text: "R14"; }
+        label { x: 107;  y: 140; width: 20; height: 20; text: "R15"; }
+        
+        // Modes (prints below banked registers)
+        label l_svc_ { x: 210; y: 140; width: 80; height: 20; text: "svc"; }
+        label l_abt_ { x: 290; y: 140; width: 80; height: 20; text: "abt"; }
+        label l_und_ { x: 370; y: 140; width: 80; height: 20; text: "und"; }
+        label l_irq_ { x: 450; y: 140; width: 80; height: 20; text: "irq"; }
+        label l_fiq_ { x: 530; y: 140; width: 80; height: 20; text: "fiq"; }
+        
+        // CPSR, its frame and its bit names
+        label l_CPSR  { x: 270; y: 20; width: 40; height: 20; text: "CPSR"; }
+        rectangle r_CPSR  { x: 310; y: 20; width: 170; height: 20; }
+        label { x: 312; y: 0;  width: 40; height: 20; text: "N Z C V"; }
+        label { x: 400; y: 0;  width: 30; height: 20; text: "I F T"; }
+        label { x: 430; y: 0;  width: 50; height: 20; text: "[--- M ---]"; }
+
+        // SPSR name
+        label l_SPSR { x: 176; y: 180; width: 30; height: 20; text: "SPSR"; }
+        
+        // Processor mode
+        label l_mode_title { x: 330; y: 60;  width: 100; height: 20;
+                             text: "Processor mode = "; }
+        label l_mode { x: 430; y: 60;  width: 20; height: 20; }
+		
+		// Number base selector
+		toggle dec_toggle {
+			x:10; y:180;
+			width: 110;
+			height:20;
+			state: 0;
+			sensitive: false;
+			text: "Use decimal base";
+			on_text: "Use decimal base";
+			corner_radius: 80;
+		}
+    }
+
+
+    /***************************************************************************\
+    *                                                                           *
+    *                          Properties of breakpoints                        *
+    *                                                                           *
+    \***************************************************************************/
+
+    breakpoint {
+        alignment: 4;
+        minimum:   0;
+        maximum:   0xFFFFFFFC; //65532;
+    }
+
+     
+    /***************************************************************************\
+    *                                                                           *
+    *                          Stack objects
+    *                                                                           *
+    \***************************************************************************/
+
+    
+    stack svc_stack {
+        title: "svc stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+
+    stack irq_stack {
+        title: "irq stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+
+    stack fiq_stack {
+        title: "fiq stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+
+    stack usr_sys_stack {
+        title: "usr/sys stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+/*    
+    stack und_stack {
+        title: "und stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+    
+    stack abt_stack {
+        title: "abt stack"; // za ispis u GUI-ju
+        alignment: 4;
+    }
+*/
+    // - stack functions ----------------------------------------------------
+    
+    function void push_pop_executed () {
+        switch # ( CPSR_mode ) {
+        
+        case SVC_mode: 
+            if(IR_load)
+                pop_executed(svc_stack, R[13], IR[24], IR[23]); 
+            else
+                push_executed(svc_stack, R[13], !IR[24], ! IR[23]); 
+            break;
+            
+        case USR_mode:
+        case SYS_mode:
+            if(IR_load)
+                pop_executed(usr_sys_stack, R[13], IR[24], IR[23]); 
+            else
+                push_executed(usr_sys_stack, R[13], !IR[24], ! IR[23]); 
+            break;
+
+        case IRQ_mode:
+            if(IR_load)
+                pop_executed(irq_stack, R[13], IR[24], IR[23]); 
+            else
+                push_executed(irq_stack, R[13], !IR[24], ! IR[23]); 
+            break;
+            
+        case FIQ_mode:
+            if(IR_load)
+                pop_executed(fiq_stack, R[13], IR[24], IR[23]); 
+            else
+                push_executed(fiq_stack, R[13], !IR[24], ! IR[23]); 
+            break;
+            
+        //case UND_mode: set_top_of_stack(und_stack, R[13]); break;
+        //case ABT_mode: set_top_of_stack(abt_stack, R[13]); break;
+        }
+    }
+    
+    
+    function void SP_changed() {
+        switch # ( CPSR_mode ) {
+            case SVC_mode: set_top_of_stack(svc_stack, R[13]); break;
+            case USR_mode:
+            case SYS_mode: set_top_of_stack(usr_sys_stack, R[13]); break;
+            case IRQ_mode: set_top_of_stack(irq_stack, R[13]); break;
+            case FIQ_mode: set_top_of_stack(fiq_stack, R[13]); break;
+            //case UND_mode: set_top_of_stack(und_stack, R[13]); break;
+            //case ABT_mode: set_top_of_stack(abt_stack, R[13]); break;
+        }
+    }
+
+/*******************************************************************
+    function void set_stack_type () 
+    {
+	var bits<32> empty;
+
+        if(IR_load) {
+            empty #= IR[24];
+        } else {
+            empty #= ~IR[24];
+        }
+
+        switch # ( CPSR_mode ) {
+            case SVC_mode: svc_stack.empty = empty; break;
+            case USR_mode:
+            case SYS_mode: usr_sys_stack.empty = empty; break;
+            case IRQ_mode: irq_stack.empty = empty; break;
+            case FIQ_mode: fiq_stack.empty = empty; break;
+            //case UND_mode: und_stack.empty = empty; break;
+            //case ABT_mode: abt_stack.empty = empty; break;                
+        }
+    }
+*******************************************************************/
+
+    /***************************************************************************\
+    *                                                                           *
+    *                    trace & live presentation (in console)                 *
+    *                                                                           *
+    \***************************************************************************/
+
+    // --------------------- trace points - definitions -------------------------
+
+    trace --t_registers {                 // trace 1 (in old Atlas)
+        name: "PRINT registers";
+        desc: "Prints register values to console after every instruction executed";
+    }
+    trace t_mnemonic {                  // trace 2 (in old Atlas)
+        name: "Log executed instructions to Console";
+        desc: "Prints mnemonic of currently executed instruction to console";
+        default: false;
+    }
+    trace --t_int {                       // trace 4 (in old Atlas)
+        name: "PRINT exceptions and modes";
+        desc: "Prints to console events related to interrupts, exceptions, and changes in mode";
+    }
+
+    // --------------------------- trace functions ------------------------------
+
+    function init colorize_svc (color clr) {
+        
+        l_svc_.text_color = clr;
+        
+        l_SPSR_svc_f.text_color = clr;
+        l_SPSR_svc_c.text_color = clr;
+        l_SPSR_svc_m.text_color = clr;
+    }
+
+    function init colorize_abt (color clr) {
+        
+        l_abt_.text_color = clr;
+        
+        l_SPSR_abt_f.text_color = clr;
+        l_SPSR_abt_c.text_color = clr;
+        l_SPSR_abt_m.text_color = clr;
+    }
+
+    function init colorize_und (color clr) {
+        
+        l_und_.text_color = clr;
+        
+        l_SPSR_und_f.text_color = clr;
+        l_SPSR_und_c.text_color = clr;
+        l_SPSR_und_m.text_color = clr;
+    }
+
+    function init colorize_irq (color clr) {
+        
+        l_irq_.text_color = clr;
+        
+        l_SPSR_irq_f.text_color = clr;
+        l_SPSR_irq_c.text_color = clr;
+        l_SPSR_irq_m.text_color = clr;
+    }
+        
+    function init colorize_fiq (color clr) {
+     
+        l_fiq_.text_color = clr;
+        
+        l_SPSR_fiq_f.text_color = clr;
+        l_SPSR_fiq_c.text_color = clr;
+        l_SPSR_fiq_m.text_color = clr;
+    }
+
+    
+    function string print_mode(bits<5> mode) {
+        decode(mode) {
+        case USR_mode: return "usr";
+        case SYS_mode: return "sys";
+        case IRQ_mode: return "irq";
+        case FIQ_mode: return "fiq";
+        case UND_mode: return "und";
+        case ABT_mode: return "abt";
+        case SVC_mode: return "svc";
+        default:  return "???";
+        }
+    }
+
+
+    // graphical presentation of all 37 registers
+    function init tfun_g_registers () {
+    
+        var bits<32> use_dec;
+		use_dec = dec_toggle.state;
+        
+        // show [R0 - R7] and R15 (logical and physical are same registers)
+		if(use_dec) {
+			r_R0.text = sprintf("%013 3d", R[0] );
+			r_R1.text = sprintf("%013 3d", R[1] );
+			r_R2.text = sprintf("%013 3d", R[2] );
+			r_R3.text = sprintf("%013 3d", R[3] );
+			r_R4.text = sprintf("%013 3d", R[4] );
+			r_R5.text = sprintf("%013 3d", R[5] );
+			r_R6.text = sprintf("%013 3d", R[6] );
+			r_R7.text = sprintf("%013 3d", R[7] );
+			
+			r_R15.text = sprintf("%013 3d", R[15] );
+		} else {
+			r_R0.text = sprintf("0x %011 2H", R[0] );
+			r_R1.text = sprintf("0x %011 2H", R[1] );
+			r_R2.text = sprintf("0x %011 2H", R[2] );
+			r_R3.text = sprintf("0x %011 2H", R[3] );
+			r_R4.text = sprintf("0x %011 2H", R[4] );
+			r_R5.text = sprintf("0x %011 2H", R[5] );
+			r_R6.text = sprintf("0x %011 2H", R[6] );
+			r_R7.text = sprintf("0x %011 2H", R[7] );
+			
+			r_R15.text = sprintf("0x %011 2H", R[15] );
+		}
+        if(R_changed[0]) {
+            r_R0.text_color = red;
+            R_changed[0] = 0;
+        } else {
+            r_R0.text_color = black;
+        }
+        if(R_changed[1]) {
+            r_R1.text_color = red;
+            R_changed[1] = 0;
+        } else {
+            r_R1.text_color = black;
+        }
+        if(R_changed[2]) {
+            r_R2.text_color = red;
+            R_changed[2] = 0;
+        } else {
+            r_R2.text_color = black;
+        }
+        if(R_changed[3]) {
+            r_R3.text_color = red;
+            R_changed[3] = 0;
+        } else {
+            r_R3.text_color = black;
+        }
+        if(R_changed[4]) {
+            r_R4.text_color = red;
+            R_changed[4] = 0;
+        } else {
+            r_R4.text_color = black;
+        }
+        if(R_changed[5]) {
+            r_R5.text_color = red;
+            R_changed[5] = 0;
+        } else {
+            r_R5.text_color = black;
+        }
+        if(R_changed[6]) {
+            r_R6.text_color = red;
+            R_changed[6] = 0;
+        } else {
+            r_R6.text_color = black;
+        }
+        if(R_changed[7]) {
+            r_R7.text_color = red;
+            R_changed[7] = 0;
+        } else {
+            r_R7.text_color = black;
+        }
+        if(R_changed[15]) {
+            r_R15.text_color = red;
+            R_changed[15] = 0;
+        } else {
+            r_R15.text_color = black;
+        }
+
+        
+        // show [R8 - R12] (FIQ or any other mode)
+        if( CPSR_mode == FIQ_mode ) {
+			if(use_dec) {
+				// ................ All-but Fast Interrupt
+				r_R8.text  = sprintf("%013 3d", R8_allbutfiq );
+				r_R9.text  = sprintf("%013 3d", R9_allbutfiq );
+				r_R10.text = sprintf("%013 3d", R10_allbutfiq );
+				r_R11.text = sprintf("%013 3d", R11_allbutfiq );
+				r_R12.text = sprintf("%013 3d", R12_allbutfiq );
+				
+				// ................ Fast Interrupt
+				r_R8_fiq.text  = sprintf("%013 3d", R[8] );
+				r_R9_fiq.text  = sprintf("%013 3d", R[9] );
+				r_R10_fiq.text = sprintf("%013 3d", R[10] );
+				r_R11_fiq.text = sprintf("%013 3d", R[11] );
+				r_R12_fiq.text = sprintf("%013 3d", R[12] );
+			} else {
+				// ................ All-but Fast Interrupt
+				r_R8.text  = sprintf("0x %011 2H", R8_allbutfiq );
+				r_R9.text  = sprintf("0x %011 2H", R9_allbutfiq );
+				r_R10.text = sprintf("0x %011 2H", R10_allbutfiq );
+				r_R11.text = sprintf("0x %011 2H", R11_allbutfiq );
+				r_R12.text = sprintf("0x %011 2H", R12_allbutfiq );
+				
+				// ................ Fast Interrupt
+				r_R8_fiq.text  = sprintf("0x %011 2H", R[8] );
+				r_R9_fiq.text  = sprintf("0x %011 2H", R[9] );
+				r_R10_fiq.text = sprintf("0x %011 2H", R[10] );
+				r_R11_fiq.text = sprintf("0x %011 2H", R[11] );
+				r_R12_fiq.text = sprintf("0x %011 2H", R[12] );
+            }
+            
+            r_R8.text_color  = inactive_color;
+            r_R9.text_color  = inactive_color;
+            r_R10.text_color = inactive_color;
+            r_R11.text_color = inactive_color;
+            r_R12.text_color = inactive_color;
+            
+            if(R_changed[8]) {
+                r_R8_fiq.text_color = red;
+                R_changed[8] = 0;
+            } else {
+                r_R8_fiq.text_color = black;
+            }
+            if(R_changed[9]) {
+                r_R9_fiq.text_color = red;
+                R_changed[9] = 0;
+            } else {
+                r_R9_fiq.text_color = black;
+            }
+            if(R_changed[10]) {
+                r_R10_fiq.text_color = red;
+                R_changed[10] = 0;
+            } else {
+                r_R10_fiq.text_color = black;
+            }
+            if(R_changed[11]) {
+                r_R11_fiq.text_color = red;
+                R_changed[11] = 0;
+            } else {
+                r_R11_fiq.text_color = black;
+            }
+            if(R_changed[12]) {
+                r_R12_fiq.text_color = red;
+                R_changed[12] = 0;
+            } else {
+                r_R12_fiq.text_color = black;
+            }
+
+        } else {
+			if(use_dec) {
+				// ................ All-but Fast Interrupt
+				r_R8.text  = sprintf("%013 3d", R[8] );
+				r_R9.text  = sprintf("%013 3d", R[9] );
+				r_R10.text = sprintf("%013 3d", R[10] );
+				r_R11.text = sprintf("%013 3d", R[11] );
+				r_R12.text = sprintf("%013 3d", R[12] );
+
+				// ................ Fast Interrupt
+				r_R8_fiq.text  = sprintf("%013 3d", R8_fiq );
+				r_R9_fiq.text  = sprintf("%013 3d", R9_fiq );
+				r_R10_fiq.text = sprintf("%013 3d", R10_fiq );
+				r_R11_fiq.text = sprintf("%013 3d", R11_fiq );
+				r_R12_fiq.text = sprintf("%013 3d", R12_fiq );
+			} else {
+				// ................ All-but Fast Interrupt
+				r_R8.text  = sprintf("0x %011 2H", R[8] );
+				r_R9.text  = sprintf("0x %011 2H", R[9] );
+				r_R10.text = sprintf("0x %011 2H", R[10] );
+				r_R11.text = sprintf("0x %011 2H", R[11] );
+				r_R12.text = sprintf("0x %011 2H", R[12] );
+
+				// ................ Fast Interrupt
+				r_R8_fiq.text  = sprintf("0x %011 2H", R8_fiq );
+				r_R9_fiq.text  = sprintf("0x %011 2H", R9_fiq );
+				r_R10_fiq.text = sprintf("0x %011 2H", R10_fiq );
+				r_R11_fiq.text = sprintf("0x %011 2H", R11_fiq );
+				r_R12_fiq.text = sprintf("0x %011 2H", R12_fiq );
+			}
+            
+            r_R8_fiq.text_color  = inactive_color;
+            r_R9_fiq.text_color  = inactive_color;
+            r_R10_fiq.text_color = inactive_color;
+            r_R11_fiq.text_color = inactive_color;
+            r_R12_fiq.text_color = inactive_color;
+            
+            if(R_changed[8]) {
+                r_R8.text_color = red;
+                R_changed[8] = 0;
+            } else {
+                r_R8.text_color = black;
+            }
+            if(R_changed[9]) {
+                r_R9.text_color = red;
+                R_changed[9] = 0;
+            } else {
+                r_R9.text_color = black;
+            }
+            if(R_changed[10]) {
+                r_R10.text_color = red;
+                R_changed[10] = 0;
+            } else {
+                r_R10.text_color = black;
+            }
+            if(R_changed[11]) {
+                r_R11.text_color = red;
+                R_changed[11] = 0;
+            } else {
+                r_R11.text_color = black;
+            }
+            if(R_changed[12]) {
+                r_R12.text_color = red;
+                R_changed[12] = 0;
+            } else {
+                r_R12.text_color = black;
+            }
+        }
+
+        
+        // show [R13-R14]      (All modes)
+        // show SPSR registers (All modes)
+        // HIGHLIGHT used mode i.e. colorize it with black
+        
+        if( CPSR_mode == USR_mode || CPSR_mode == SYS_mode) {
+            // ................ User and System
+			if(use_dec) {
+				r_R13.text = sprintf("%013 3d", R[13] );
+				r_R14.text = sprintf("%013 3d", R[14] );
+			} else {
+				r_R13.text = sprintf("0x %011 2H", R[13] );
+				r_R14.text = sprintf("0x %011 2H", R[14] );
+			}
+            
+            if(R_changed[13]) {
+                r_R13.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14.text_color = black;
+            }
+        } else {
+            // ................ NOT User and System
+			if(use_dec) {
+				r_R13.text = sprintf("%013 3d", R13_usr_sys );
+				r_R14.text = sprintf("%013 3d", R14_usr_sys );
+			} else {
+				r_R13.text = sprintf("0x %011 2H", R13_usr_sys );
+				r_R14.text = sprintf("0x %011 2H", R14_usr_sys );
+			}
+            
+            r_R13.text_color = inactive_color;
+            r_R14.text_color = inactive_color;
+        }
+
+        if( CPSR_mode == SVC_mode) {        
+            // ................ Supervisor
+			if(use_dec) {
+				r_R13_svc.text = sprintf("%013 3d", R[13] );
+				r_R14_svc.text = sprintf("%013 3d", R[14] );
+			} else {
+				r_R13_svc.text = sprintf("0x %011 2H", R[13] );
+				r_R14_svc.text = sprintf("0x %011 2H", R[14] );
+			}
+
+            l_SPSR_svc_f.text = sprintf("%04b", SPSR[31..28]);
+            l_SPSR_svc_c.text = sprintf("%03b", SPSR[7..5]);
+            l_SPSR_svc_m.text = print_mode(SPSR[4..0]);
+
+            colorize_svc (active_color);
+            if(R_changed[13]) {
+                r_R13_svc.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13_svc.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14_svc.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14_svc.text_color = black;
+            }
+        } else {
+            // ................ NOT Supervisor
+			if(use_dec) {
+ 				r_R13_svc.text = sprintf("%013 3d", R13_svc );
+				r_R14_svc.text = sprintf("%013 3d", R14_svc );
+			} else {
+				r_R13_svc.text = sprintf("0x %011 2H", R13_svc );
+				r_R14_svc.text = sprintf("0x %011 2H", R14_svc );
+            }
+
+            l_SPSR_svc_f.text = sprintf("%04b", SPSR_svc[31..28]);
+            l_SPSR_svc_c.text = sprintf("%03b", SPSR_svc[7..5]);
+            l_SPSR_svc_m.text = print_mode(SPSR_svc[4..0]);
+
+            colorize_svc (inactive_color);
+            r_R13_svc.text_color = inactive_color;
+            r_R14_svc.text_color = inactive_color;
+        }
+        
+        if( CPSR_mode == ABT_mode) {
+            // ................ Abort
+            if(use_dec) {
+                r_R13_abt.text = sprintf("%013 3d", R[13] );
+                r_R14_abt.text = sprintf("%013 3d", R[14] );
+            } else {
+                r_R13_abt.text = sprintf("0x %011 2H", R[13] );
+                r_R14_abt.text = sprintf("0x %011 2H", R[14] );
+            }
+
+            l_SPSR_abt_f.text = sprintf("%04b", SPSR[31..28]);
+            l_SPSR_abt_c.text = sprintf("%03b", SPSR[7..5]);
+            l_SPSR_abt_m.text = print_mode(SPSR[4..0]);
+
+            colorize_abt (active_color);
+            if(R_changed[13]) {
+                r_R13_abt.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13_abt.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14_abt.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14_abt.text_color = black;
+            }
+        } else {
+            // ................ NOT Abort
+            if(use_dec) {
+                r_R13_abt.text = sprintf("%013 3d", R13_abt );
+                r_R14_abt.text = sprintf("%013 3d", R14_abt );
+            } else {
+                r_R13_abt.text = sprintf("0x %011 2H", R13_abt );
+                r_R14_abt.text = sprintf("0x %011 2H", R14_abt );
+            }
+
+            l_SPSR_abt_f.text = sprintf("%04b", SPSR_abt[31..28]);
+            l_SPSR_abt_c.text = sprintf("%03b", SPSR_abt[7..5]);
+            l_SPSR_abt_m.text = print_mode(SPSR_abt[4..0]);
+
+            colorize_abt (inactive_color);
+            r_R13_abt.text_color = inactive_color;
+            r_R14_abt.text_color = inactive_color;
+        }
+        
+        if( CPSR_mode == UND_mode) {
+            // ................ Undefined
+            if(use_dec) {
+                r_R13_und.text = sprintf("%013 3d", R[13] );
+                r_R14_und.text = sprintf("%013 3d", R[14] );
+            } else {
+                r_R14_und.text = sprintf("0x %011 2H", R[14] );
+                r_R13_und.text = sprintf("0x %011 2H", R[13] );
+            }
+            
+            l_SPSR_und_f.text = sprintf("%04b", SPSR[31..28]);
+            l_SPSR_und_c.text = sprintf("%03b", SPSR[7..5]);
+            l_SPSR_und_m.text = print_mode(SPSR[4..0]);
+
+            colorize_und (active_color);
+            if(R_changed[13]) {
+                r_R13_und.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13_und.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14_und.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14_und.text_color = black;
+            }
+        } else {
+            // ................ NOT Undefined
+            if(use_dec) {
+                r_R13_und.text = sprintf("%013 3d", R13_und );
+                r_R14_und.text = sprintf("%013 3d", R14_und );
+            } else {
+                r_R13_und.text = sprintf("0x %011 2H", R13_und );
+                r_R14_und.text = sprintf("0x %011 2H", R14_und );
+            }
+
+            l_SPSR_und_f.text = sprintf("%04b", SPSR_und[31..28]);
+            l_SPSR_und_c.text = sprintf("%03b", SPSR_und[7..5]);
+            l_SPSR_und_m.text = print_mode(SPSR_und[4..0]);
+
+            colorize_und (inactive_color);
+            r_R13_und.text_color = inactive_color;
+            r_R14_und.text_color = inactive_color;
+        }
+        
+        if( CPSR_mode == IRQ_mode) {        
+            // ................ Interrupt
+            if(use_dec) {
+                r_R13_irq.text = sprintf("%013 3d", R[13] );
+                r_R14_irq.text = sprintf("%013 3d", R[14] );
+            } else {
+                r_R13_irq.text = sprintf("0x %011 2H", R[13] );
+                r_R14_irq.text = sprintf("0x %011 2H", R[14] );
+            }
+            
+            l_SPSR_irq_f.text = sprintf("%04b", SPSR[31..28]);
+            l_SPSR_irq_c.text = sprintf("%03b", SPSR[7..5]);
+            l_SPSR_irq_m.text = print_mode(SPSR[4..0]);
+
+            colorize_irq (active_color);
+            if(R_changed[13]) {
+                r_R13_irq.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13_irq.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14_irq.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14_irq.text_color = black;
+            }
+        } else {
+            // ................ NOT Interrupt
+            if(use_dec) {
+                r_R13_irq.text = sprintf("%013 3d", R13_irq );
+                r_R14_irq.text = sprintf("%013 3d", R14_irq ); 
+            } else {
+                r_R13_irq.text = sprintf("0x %011 2H", R13_irq );
+                r_R14_irq.text = sprintf("0x %011 2H", R14_irq ); 
+            }
+            
+            l_SPSR_irq_f.text = sprintf("%04b", SPSR_irq[31..28]);
+            l_SPSR_irq_c.text = sprintf("%03b", SPSR_irq[7..5]);
+            l_SPSR_irq_m.text = print_mode(SPSR_irq[4..0]);
+
+            colorize_irq (inactive_color);
+            r_R13_irq.text_color = inactive_color;
+            r_R14_irq.text_color = inactive_color;
+        }
+        
+        if( CPSR_mode == FIQ_mode) {
+            // ................ Fast Interrupt
+            if(use_dec) {
+                r_R13_fiq.text = sprintf("%013 3d", R[13] );
+                r_R14_fiq.text = sprintf("%013 3d", R[14] );
+            } else { 
+                r_R13_fiq.text = sprintf("0x %011 2H", R[13] );
+                r_R14_fiq.text = sprintf("0x %011 2H", R[14] );
+            }
+            
+            l_SPSR_fiq_f.text = sprintf("%04b", SPSR[31..28]);
+            l_SPSR_fiq_c.text = sprintf("%03b", SPSR[7..5]);
+            l_SPSR_fiq_m.text = print_mode(SPSR[4..0]);
+
+            colorize_fiq (active_color);
+            if(R_changed[13]) {
+                r_R13_fiq.text_color = red;
+                R_changed[13] = 0;
+            } else {
+                r_R13_fiq.text_color = black;
+            }
+            if(R_changed[14]) {
+                r_R14_fiq.text_color = red;
+                R_changed[14] = 0;
+            } else {
+                r_R14_fiq.text_color = black;
+            }
+        } else {
+            // ................ NOT Fast Interrupt
+            if(use_dec) {
+                r_R14_fiq.text = sprintf("%013 3d", R14_fiq );
+                r_R13_fiq.text = sprintf("%013 3d", R13_fiq );
+            } else { 
+                r_R13_fiq.text = sprintf("0x %011 2H", R13_fiq );
+                r_R14_fiq.text = sprintf("0x %011 2H", R14_fiq );
+            }
+            
+            l_SPSR_fiq_f.text = sprintf("%04b", SPSR_fiq[31..28]);
+            l_SPSR_fiq_c.text = sprintf("%03b", SPSR_fiq[7..5]);
+            l_SPSR_fiq_m.text = print_mode(SPSR_fiq[4..0]);
+
+            colorize_fiq (inactive_color);
+            r_R13_fiq.text_color = inactive_color;
+            r_R14_fiq.text_color = inactive_color;
+        }
+
+
+        // show CPSR (unique register)
+        r_CPSR__NZCV.text = sprintf("%07 1b", CPSR[31..28]); // 0-fill, width=7, space each 1 character
+        r_CPSR__IFT.text = sprintf("%05 1b", CPSR[7..5]); // 0-fill, width=5, space each 1 character
+        r_CPSR__M.text = sprintf("%09 1b", CPSR[4..0]); // 0-fill, width=9, space each 1 character
+        
+        if( CPSR_changed == 1 ) {
+            CPSR_changed = 0;
+            r_CPSR__NZCV.text_color = red;
+            r_CPSR__IFT.text_color = red;
+            r_CPSR__M.text_color = red;
+
+        } else {
+            r_CPSR__NZCV.text_color = black;
+            r_CPSR__IFT.text_color = black;
+            r_CPSR__M.text_color = black;
+        }
+
+        // --------------- Show Processor mode ---------------------
+        l_mode.text = print_mode(CPSR[4..0]);
+
+        return;
+    }
+
+    
+    // console presentation of logical registers
+    function void tfun_registers () {
+        println "------------------------- Registers --------------------------";
+        // R0-R15
+        printf("R0 =0x%08H  R1 =0x%08H", R[0], R[1]);
+        printf("  R2 =0x%08H  R3 =0x%08H\n", R[2], R[3]);
+        printf("R4 =0x%08H  R5 =0x%08H", R[4], R[5]);
+        printf("  R6 =0x%08H  R7 =0x%08H\n", R[6], R[7]);
+        printf("R8 =0x%08H  R9 =0x%08H", R[8], R[9]);
+        printf("  R10=0x%08H  R11=0x%08H\n", R[10], R[11]);
+        printf("R12=0x%08H  R13=0x%08H", R[12], R[13]);
+        printf("  R14=0x%08H  R15=0x%08H\n", R[14], R[15]);
+        // CPSR
+        printf("CPSR=0b%032b\n", CPSR);
+        // SPSR
+        if (CPSR_mode != USR_mode && CPSR_mode != SYS_mode) { // not User NOR System
+            printf("SPSR=0b%032b\n", SPSR);
+        }
+        println "--------------------------------------------------------------";
+        return;
+    }
+
+    // interrupt subsystem status
+    function void tfun_int () {
+        println "-- Interrupt and DMA report --";
+        
+        println "DMA";
+        print "  request: ";
+        if (HBUSREQ == 1) 
+            { println "TRUE"; }
+        else 
+            { println "false"; }
+        
+        println "FIQ";
+        print "  allowed: ";
+        if (CPSR_FIQ == ENABLED) 
+            { println "TRUE"; }
+        else 
+            { println "false"; }
+        print "  pending: ";
+        if (FIQ == 1)
+            { println "TRUE"; }
+        else
+            { println "false"; }
+
+        println "IRQ";
+        print "  allowed: ";
+        if (CPSR_IRQ == ENABLED)
+            { println "TRUE"; }
+        else
+            { println "false"; }
+        print "  pending: ";
+        if (IRQ == 1) 
+            { println "TRUE"; }
+        else 
+            { println "false"; }
+        println "----------------------";
+        return;
+    }
+
+    // instruction condition
+    function void tfun_mnemonic_cond () {
+        decode (IR_cond) {
+            case EQ_cond: print "EQ";        //EQ - equal / equals zero
+            case NE_cond: print "NE";        //NE - not equal
+            case CS_HS_cond: print "CS";     //CS/HS - carry set / unsigned higher or same
+            case CC_LO_cond: print "CC";     //CC/LO - carry clear / unsigned lover
+            case MI_cond: print "MI";        //MI - minus / negative
+            case PL_cond: print "PL";        //PL - plus / positive or zero
+            case VS_cond: print "VS";        //VS - overflow
+            case VC_cond: print "VC";        //VC - no overflow
+            case HI_cond: print "HI";        //HI - unsigned higher
+            case LS_cond: print "LS";        //LS - unsigned lower or same
+            case GE_cond: print "GE";        //GE - signed greater then or equal
+            case LT_cond: print "LT";        //LT - signed less than
+            case GT_cond: print "GT";        //GT - signed grater than
+            case LE_cond: print "LE";        //LE - signed less than or equal
+            case ALWAYS_cond: {}             //AL - always
+            default: println "DEFAULT tfun_mnemonic_cond"; 
+        }
+        return;
+    }
+
+    // shift type of operand2
+    function void tfun_mnemonic_opnd2shift () 
+    {
+        var bits<32> shift_amount;
+        // print shift type
+        decode (iws__shift) {
+            case LSL_opcode: print ", LSL"; 
+            case LSR_opcode: print ", LSR"; 
+            case ASR_opcode: print ", ASR"; 
+            case ROR_RRX_opcode:
+                if (IR[4] == 0 && iws__shift_amount == 0) {
+                    print ", RRX";
+                } else {
+                    print ", ROR";
+                }
+        }
+        
+        // print shift amount
+        if (IR[4] == 1) {             // shift Rm by value in Rs[7..0]
+            printf (" R%d", iws__Rs);// value of shift in register
+            
+        } else {                      // shift Rm by incoded shift_amount5 imm
+            shift_amount = iws__shift_amount;
+            if (iws__shift == LSR_opcode  || iws__shift == ASR_opcode) {
+                if (shift_amount == 0) {
+                    shift_amount=32;
+                }
+            }
+            printf (" #%d", shift_amount);// value of shift from immediate
+        }
+    }
+
+    // data processing mnemonic
+    function void tfun_mnemonic__data_processing () {
+        decode (iws__opcode) {
+            case AND_opcode: print "AND";   // AND - logical bit-wise AND
+            case EOR_opcode: print "EOR";   // EOR - logical bit-wise exclusive OR
+            case SUB_opcode: print "SUB";   // SUB - subtract
+            case RSB_opcode: print "RSB";   // RSB - reverse subtract
+            case ADD_opcode: print "ADD";   // ADD - add
+            case ADC_opcode: print "ADC";   // ADC - add with carry
+            case SBC_opcode: print "SBC";   // SBC - subtract with carry
+            case RSC_opcode: print "RSC";   // RSC - reverse subtract with carry
+            case TST_opcode: print "TST";   // TST - test
+            case TEQ_opcode: print "TEQ";   // TEQ - test equivalence
+            case CMP_opcode: print "CMP";   // CMP - compare
+            case CMN_opcode: print "CMN";   // CMN - compare negated
+            case ORR_opcode: print "ORR";   // ORR - logical bit-wise OR
+            case MOV_opcode: print "MOV";   // MOV - move
+            case BIC_opcode: print "BIC";   // BIC - bit clear
+            case MVN_opcode: print "MVN";   // MVN - move negated
+        }
+        return;
+    }
+
+    function void tfun_mnemonic__data_transfer () {
+        // mnemonic-
+        if (IR_load) {
+            print "LDR";
+        } else {
+            print "STR";
+        }
+        // -condition
+        tfun_mnemonic_cond();
+        // -size
+        if (word_flag == 1) {            // word, unsigned byte
+            if (IR_byte) {
+                print "B";
+            }
+        } else {                         // signed/unsigned halfword, signed byte
+            decode (iws__shift) {
+                case 0b10: print "SB"; 
+                case 0b01: print "H";  
+                case 0b11: print "SH"; 
+            }
+        }
+        // load destination / store source
+        printf (" R%d", iws__Rd);
+        // base register
+        printf (", [R%d", iws__Rn);
+        if (IR_postindex) {               // post index
+            print "]";
+        }
+        print ", ";
+        // immediate offset mark
+        if ((IR[25] == 0 && word_flag == 1) || (IR[22] == 1 && word_flag == 0)) {
+            print "#";
+        }
+        // base + offset  OR  base - offfset ?
+        if (IR_minus) {
+            print "-";
+        }
+        // offset value / offset register name
+        if (word_flag == 1) {
+            if (IR[25] == 0) {            // 12-bit immediate
+                printf ("0x%03H", iws__immediate12);
+            } else {                      // register
+                printf ("R%d", iws__Rm);
+                tfun_mnemonic_opnd2shift();
+            }
+        } else {
+            if (IR[22] == 1) {            // 8-bit immediate
+                printf ("0x%02H", offset); // calculated offset
+            } else {                      // register
+                printf ("R%d", iws__Rm);
+            }
+        }
+        // post index; write back
+        if (IR_preindex) {
+            print "]";
+            if (IR_write_back) {
+                print "!";
+            }
+        }
+        return;
+    }
+
+
+    /***************************************************************************\
+    *                                                                           *
+    *                                 behavior                                  *
+    *                                                                           *
+    \***************************************************************************/
+
+
+    // Duration of single-cycle instructions
+
+    sync function void wait_next_rise_clock() {
+        delay 1 clock / 4;
+        on_rise clock;
+    }
+
+
+
+    // **************************************************************************
+    // ********************** BANKED REGISTERS MAPPING **************************
+    // **************************************************************************
+    // logical registers -> physical registers
+    function void save_logical_to_physical_registers_before_mode_change ( bits<5> old_mode ) 
+    {
+        var bits<32> retval;
+        
+        decode (old_mode) {
+            case USR_mode:                 // User
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_usr_sys = R[13];
+                R14_usr_sys = R[14];
+            case FIQ_mode:                 // Fast Interrupt
+                R8_fiq = R[8];
+                R9_fiq = R[9];
+                R10_fiq = R[10];
+                R11_fiq = R[11];
+                R12_fiq = R[12];
+                R13_fiq = R[13];
+                R14_fiq = R[14];
+                SPSR_fiq = SPSR;
+            case IRQ_mode:                 // Interrupt
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_irq = R[13];
+                R14_irq = R[14];
+                SPSR_irq = SPSR;
+            case SVC_mode:                 // Supervisor
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_svc = R[13];
+                R14_svc = R[14];
+                SPSR_svc = SPSR;
+            case ABT_mode:                 // Abort
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_abt = R[13];
+                R14_abt = R[14];
+                SPSR_abt = SPSR;
+            case UND_mode:                 // Undefined
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_und = R[13];
+                R14_und = R[14];
+                SPSR_und = SPSR;
+            case SYS_mode:                 // System
+                R8_allbutfiq = R[8];
+                R9_allbutfiq = R[9];
+                R10_allbutfiq = R[10];
+                R11_allbutfiq = R[11];
+                R12_allbutfiq = R[12];
+                R13_usr_sys = R[13];
+                R14_usr_sys = R[14];
+            // this can hapen if invalid value is dumped to CPSR_c using MSR
+            default:
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //println "Procesor se nasao u nepostojecem nacinu rada!";
+                //printf ("Pogresna vrijednost u CPSR_c: 0x%02H\n", CPSR[0..4]);
+                retval = popup_error ( "Greška u simulaciji",
+                               "Pronađen je nepostojeći način rada u registru CPSR",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+        }
+        return;
+    }
+    
+    
+    // physical registers -> logical registers
+    function void copy_physical_to_logical_registers_after_mode_change ()
+    {
+        var bits<32> retval;
+        
+        decode (CPSR_mode) {
+            case USR_mode:                 // User
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_usr_sys;
+                R[14] = R14_usr_sys;
+            case FIQ_mode:                 // Fast Interrupt
+                R[8] = R8_fiq;
+                R[9] = R9_fiq;
+                R[10] = R10_fiq;
+                R[11] = R11_fiq;
+                R[12] = R12_fiq;
+                R[13] = R13_fiq;
+                R[14] = R14_fiq;
+                SPSR = SPSR_fiq;
+            case IRQ_mode:                 // Interrupt
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_irq;
+                R[14] = R14_irq;
+                SPSR = SPSR_irq;
+            case SVC_mode:                 // Supervisor
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_svc;
+                R[14] = R14_svc;
+                SPSR = SPSR_svc;
+            case ABT_mode:                 // Abort
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_abt;
+                R[14] = R14_abt;
+                SPSR = SPSR_abt;
+            case UND_mode:                 // Undefined
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_und;
+                R[14] = R14_und;
+                SPSR = SPSR_und;
+            case SYS_mode:                 // System
+                R[8] = R8_allbutfiq;
+                R[9] = R9_allbutfiq;
+                R[10] = R10_allbutfiq;
+                R[11] = R11_allbutfiq;
+                R[12] = R12_allbutfiq;
+                R[13] = R13_usr_sys;
+                R[14] = R14_usr_sys;
+           
+            default: // this can never happen because of user's error
+                //println "Map RegByMode_Load: CPSR_c M[4:0]: unknown mode :-(";
+                retval = popup_error ( "Greška u simulaciji",
+                               "Pronađen je nepostojeći način rada u registru CPSR",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+        }
+        return;
+    }
+
+    // **************************************************************************
+    // *************************** MODE: Interrupt ******************************
+    // **************************************************************************
+    function void irq_go () {
+        if( t_int )
+            println " [Mode: -> Interrupt] ";
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);
+
+        SPSR_irq = CPSR;                 // backup/save CPSR
+        CPSR_IRQ = DISABLED;             // IRQ disabled
+        CPSR_thumb = ARM_state;          // Serve IRQ ARM state, not Thumb! :)
+        // Switch to Interrupt mode:
+        CPSR_mode = IRQ_mode;
+        CPSR_changed = 1;
+
+        copy_physical_to_logical_registers_after_mode_change();
+        // ----------------- now fully in mode Interrupt -------------------------
+        R[14] = R[15] + 4;              // save adress of next_instruction + 4
+                                        //  (to simulate 2 stage pipeline)
+        R[15] = 0x18;                   // IRQ vector
+        R_changed[14] = 1;
+        R_changed[15] = 1;
+        
+        // animate registers
+        tfun_g_registers();
+    }
+
+    // **************************************************************************
+    // ************************ MODE: Fast Interrupt ****************************
+    // **************************************************************************
+    function void fiq_go () { 
+        if( t_int )
+            println "[Mode: -> Fast Interrupt] ";
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);   // save to phy. regs. before bank switch
+
+        SPSR_fiq = CPSR;                 // backup/save CPSR
+        CPSR_IRQ = DISABLED;             // IRQ disabled
+        CPSR_FIQ = DISABLED;             // FIQ disabled!!!!!
+        CPSR_thumb = ARM_state;          // ARM state, not Thumb!
+        // Switch to Fast Interrupt mode:
+        CPSR_mode = FIQ_mode;
+        CPSR_changed = 1;
+
+        copy_physical_to_logical_registers_after_mode_change();             // populate logical registers with _fiq
+        // -------------- now fully in mode Fast Interrupt -----------------------
+        R[14] = R[15] + 4;
+        R[15] = 0x1C;                    // FIQ vector
+
+        R_changed[14] = 1;
+        R_changed[15] = 1;
+        
+        // animate registers
+        tfun_g_registers();
+
+    }
+
+    // **************************************************************************
+    // ************************** MODE: Supervisor ******************************
+    // **************************************************************************
+    function void svc_go () {
+        if( t_int )
+            println "[Mode: -> Supervisor] ";
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);   // save to phy. regs. before bank switch
+
+        SPSR_svc = CPSR;                 // backup/save CPSR
+        CPSR_IRQ = DISABLED;             // IRQ disabled
+        CPSR_thumb = ARM_state;          // ARM state, not Thumb!
+        // Switch to mode Supervisor:
+        CPSR_mode = SVC_mode;
+        CPSR_changed = 1;
+
+        copy_physical_to_logical_registers_after_mode_change();             // populate logical registers with _svc
+        // ------------------ now fully in mode Supervisor -----------------------
+        R[14] = R[15] + 4;
+        R[15] = 0x08;                    // SVC vector
+        
+        R_changed[14] = 1;
+        R_changed[15] = 1;
+
+        // animate registers
+        tfun_g_registers();
+    }
+
+    // **************************************************************************
+    // ***************************** MODE: Undefined ****************************
+    // **************************************************************************
+    function void und_go () {
+        if( t_int )
+            println "[Mode: -> Undefined]";
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);   // save to phy. regs. before bank switch
+
+        SPSR_und = CPSR;                 // backup/save CPSR
+        CPSR_IRQ = DISABLED;             // IRQ disabled
+        CPSR_thumb = ARM_state;          // ARM state, not Thumb!
+        // Switch to mode Undefined:
+        CPSR_mode = UND_mode;
+        CPSR_changed = 1;
+
+        copy_physical_to_logical_registers_after_mode_change();             // populate logical registers with _und
+        // ------------------- now fully in mode Undefined -----------------------
+        R[14] = R[15] + 4;
+        R[15] = 0x04;                    // UND vector
+        
+        R_changed[14] = 1;
+        R_changed[15] = 1;
+
+        // animate registers
+        tfun_g_registers();
+    }
+    
+    // **************************************************************************
+    // ***************************** MODE: Abort ****************************
+    // **************************************************************************
+    function void abt_go () {
+        if( t_int )
+            println "[Mode: -> Abort]";
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);   // save to phy. regs. before bank switch
+
+        SPSR_abt = CPSR;                 // backup/save CPSR
+        CPSR_IRQ = DISABLED;             // IRQ disabled
+        CPSR_thumb = ARM_state;          // ARM state, not Thumb!
+        // Switch to mode Abort:
+        CPSR_mode = ABT_mode;
+        CPSR_changed = 1;
+
+        copy_physical_to_logical_registers_after_mode_change();             // populate logical registers with _abt
+        // ------------------- now fully in mode Abort -----------------------
+        R[14] = R[15] + 4;
+        if( prefetch )
+            R[15] = 0x0C;                // prefetch ABT vector
+        else
+            R[15] = 0x10;                // data ABT vector
+
+        R_changed[14] = 1;
+        R_changed[15] = 1;
+        
+        // animate registers
+        tfun_g_registers();
+    }
+
+    // **************************************************************************
+    // ************************* RETURN FROM EXCEPTION **************************
+    // **************************************************************************
+    function void exception_return ()
+    {
+        var bits<32> retval;  // to avoid warning "discarded return value"
+        
+        decode (CPSR_mode) {
+            case IRQ_mode:                 // Interrupt
+                if (t_int) {
+                    println "IRQ - povratak iz obrade prekida.";
+                }
+            case FIQ_mode:                 // Fast Interrupt
+                if (t_int) {
+                    println "FIQ - povratak iz obrade prekida.";
+                }
+            case SVC_mode:                 // Supervisor
+                if (t_int) {
+                    println "SVC - povratak iz Supervisor-a.";
+                }
+            case UND_mode:                 // Undefined
+                // NOT IMPLEMENTED (possibly could be executed without change)
+                //println "UND - NOT IMPLEMENTED return from Mode Undefined.";
+                retval = popup_error ( "Greška u simulaciji",
+                                       "Povratak iz načina UNDEFINED nije implementiran",
+                                       "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            case ABT_mode:                 // Abort
+                //NOT IMPLEMENTED
+                //println "ABT - NOT IMPLEMENTED return from Mode Abort.";
+                retval = popup_error ( "Greška u simulaciji",
+                                       "Povratak iz načina ABORT nije implementiran",
+                                       "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            case USR_mode:                 // User
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Nalazite se u nacinu rada User a pokusali ste se vratiti ";
+                //println "iz nacina rada za obradu iznimki!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                                       "Povratak iz načina USER nije moguć",
+                                       "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            case SYS_mode:                 // System
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Nalazite se u nacinu rada System a pokusali ste se vratiti ";
+                //println "iz nacina rada za obradu iznimki!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                                       "Povratak iz načina SYSTEM nije moguć",
+                                       "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            default:                      // (something else that can't be!)
+                //println "exception_return: CPSR_c M[4:0]: unknown mode :-(";
+                retval = popup_error ( "Greška u simulaciji",
+                                       "Pokušaj povratka u nepoznati način rada.\nProvjerite bitove Mode u registru CPSR.",
+                                       "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+        }
+
+        save_logical_to_physical_registers_before_mode_change(CPSR_mode);   // save to phy. regs. before bank switch
+        CPSR = SPSR;                     // restore CPSR from SPSR
+        CPSR_changed = 1;
+        copy_physical_to_logical_registers_after_mode_change();             // populate logical regs. with _<newmode>
+        // ----------- now fully in mode We-Were-Before-Exception ----------------
+
+    }
+
+    
+    // **************************************************************************
+    // ********************************* M E M O R Y ****************************
+    // **************************************************************************
+    
+    function void check_alignment (bits<32> hsize, bits<32> write)
+    {
+        var bits<32> retval;
+        
+        if( hsize==WORD_size && AR[0..1] ) {
+            abt_go();
+        
+            println "Unaligned memory WORD access on address 0x", AR;
+            print "Operation: ";
+            if(write)
+                println "data write";
+            else if(prefetch)
+            /*
+            U slučaju prefetch, animacija prelaska u prefetch (ispis registara
+            u funkciji abt_go) će se dodijeliti u isti animacijski trenutak kao
+            i prethodno izvedena promjena dbg-strelice. Međutim, promjena strelice
+            će izazvati grešku tako da se animacija promjene moda u abort neće
+            izvesti. Za sada nemam nekog pametnog rješenja.
+            */
+                println "instruction prefetch (read)";
+            else
+                println "data read";
+
+            retval = popup_error ( "Greška u asemblerskom programu",
+                "Pristupa se rijeci (word) na neporavnatoj adresi.\nVidi konzolu za detaljniju poruku.",
+                "Ok");
+            debug_arrow.visible = true; 
+            delay 0;
+            error;
+        }
+        if( hsize==HALFWORD_size && AR[0] ) {
+            abt_go();
+        
+            println "Unaligned memory HALFWORD access on address 0x", AR;
+            print "Operation: ";
+            if(write)
+                println "data write";
+            else
+                println "data read";
+
+            retval = popup_error ( "Greška u asemblerskom programu", 
+                "Pristupa se polurijeci (halfword) na neporavnatoj adresi.\nVidi konzolu za detaljniju poruku.",
+                "Ok");
+            debug_arrow.visible = true; 
+            delay 0;
+            error;
+        }
+    }
+    
+    sync function mem_read (bits<32> hsize) 
+    {
+        check_alignment(hsize, 0);
+      
+        // [1]  start the read operation
+        
+        // qqq ovaj if ! high je potreban jer tijekom izvođenja postoji on_high pri
+        // kraju glavne petlje i nakon toga se opet ulazi u dohvat strojnog koda
+        // pa će ovaj on_high ispod napraviti dodatni period clocka čekanja
+        if (!high(clock)) 
+            on_high clock;
+        
+            HADDR = AR;
+            HSIZE = hsize;
+            HWRITE = 0;
+            nMREQ = 0;
+
+        // [2] wait for HREADY
+        on_rise clock ;
+            wait rise(HREADY);
+
+        // [2] READ the data from AHB
+        on_low clock;
+            MDIN = HRDATA;
+
+        // [3] finish the read operation
+        on_rise clock;
+            nMREQ = 1;
+    }
+
+    sync function mem_write (bits<32> hsize) 
+    {
+        check_alignment(hsize, 1);
+        
+        // [1] start the write operation
+        
+        // qqq za ovaj if vidi objašnjenje u funkciji iznad (mem_read)
+        if (!high(clock))
+            on_high clock;
+        
+            HADDR = AR;
+            HSIZE = hsize;
+            HWRITE = 1;
+            nMREQ = 0;
+
+        // [2] wait for HREADY
+        on_rise clock;
+            wait rise(HREADY);   // qqq trebao bi biti osjetljiv na razinu, a ne na brid?
+
+        // [2] WRITE the data to AHB
+        on_fall clock;
+            HWDATA = MDOUT;
+
+        // [3] finish the write operation
+        on_rise clock;
+            nMREQ = 1;
+            disable HWDATA;
+    }
+    
+    
+    // ########################################################################## INSTRUCTIONS
+
+    // **************************************************************************
+    // ***************************** DATA TRANSFER ******************************
+    // **************************************************************************
+    // L O A D
+    function void do__LDR () {               // word
+        mem_read(WORD_size);
+        R[iws__Rd] = MDIN;
+        R_changed[iws__Rd] = 1;
+    }
+    function void do__LDRH () {              // halfword (16 bit)
+        mem_read(HALFWORD_size);
+        R[iws__Rd] #= MDIN[0..15];           // unsigned extension
+        R_changed[iws__Rd] = 1;
+    }
+    function void do__LDRB () {              // byte
+        mem_read(BYTE_size);
+        R[iws__Rd] #= MDIN[0..7];            // unsigned extension
+        R_changed[iws__Rd] = 1;
+    }
+    function void do__LDRSH () {             // signed halfword
+        mem_read(HALFWORD_size);
+        R[iws__Rd] $= MDIN[0..15];           // signed extension
+        R_changed[iws__Rd] = 1;
+    }
+    function void do__LDRSB () {             // signed byte
+        mem_read(BYTE_size);
+        R[iws__Rd] $= MDIN[0..7];            // signed extension
+        R_changed[iws__Rd] = 1;
+    }
+    // S T O R E
+    function void do__STR () {               // word
+        MDOUT = R[iws__Rd];
+        mem_write(WORD_size);
+    }
+    function void do__STRB () {              // byte
+        MDOUT #= R[iws__Rd][0..7];
+        mem_write(BYTE_size);
+    }
+    function void do__STRH () {              // halfword
+        MDOUT #= R[iws__Rd][0..15];
+        mem_write(HALFWORD_size);
+    }
+    
+    
+    // --------------------------------------------------------------------------
+    function void decode3__data_transfer () 
+    {
+        var bits<32> new_adress;
+        var bool empty;
+
+        // calculate offset
+        if (word_flag == 1) {            // LDR, LDRB
+            if (IR[25] == 0) {            // offset type: immediate
+                offset #= iws__immediate12;
+            } else {                      // offset type: (scaled) register
+                operand = R[iws__Rm];
+                decode (iws__shift) {
+                    case LSL_opcode: operand = shiftl (operand, iws__shift_amount);
+                    case LSR_opcode: operand = shiftr (operand, iws__shift_amount);
+                    case ASR_opcode: operand = ashiftr (operand, iws__shift_amount);
+                    case ROR_RRX_opcode:
+                        if (IR[4] == 0 && iws__shift_amount == 0) {
+                            operand = rotr (operand, 1); // RRX
+                            operand[31] = C_FLAG;
+                        } else {
+                            operand = rotr (operand, iws__shift_amount); // ROR
+                        }
+                }
+                offset = operand;                // offset calculation DONE :)
+            }
+
+        } else {                           // LDRH, LDRSH, LDRSB (from ARMv4)
+            if (IR[22] == 1) {            // offset type: immediate
+                operand #= (#<32> IR[8..11] << 4) | IR[0..3];
+            } else {                      // offset type: register
+                operand = R[iws__Rm];
+            }
+            offset = operand;                // offset calculation DONE :)
+        }
+
+        // trace
+        if (t_mnemonic) { tfun_mnemonic__data_transfer(); }
+
+        base = R[iws__Rn];
+        if (iws__Rn == 15) {             // base reg is PC: advance address by 4
+            base = base + 4;
+        }
+
+        // calculate new adress from base register and offset
+        if (IR_plus) {               // base + offset
+            new_adress = base + offset;
+        } else {                         // base - offset
+            new_adress = base - offset;
+        }
+
+        // pre/post index - Use newly calculated adress or base register value?
+        if (IR_preindex) {
+            AR = new_adress;
+        } else {
+            AR = base;
+        }
+        // decode instruction
+        if (IR_load) {               // L o a d
+            R[iws__Rd] = 0;
+            if (word_flag == 1) {
+                if (IR_byte) {         // unsigned byte
+                    do__LDRB();
+                } else {                   // word
+                    do__LDR();
+                }
+            } else {
+                decode (iws__shift) {
+                    case 0b10:              // signed byte
+                        do__LDRSB();
+                    case 0b01:              // unsigned halfword
+                        do__LDRH();
+                    case 0b11:              // signed halfword
+                        do__LDRSH();
+                }
+            }
+            if( iws__Rd == 13)
+                SP_changed();
+        } else {                         // S t o r e
+            MDOUT = 0;
+            if (word_flag == 1) {
+                if (IR_byte) {         // byte
+                    do__STRB();
+                } else {                   // word
+                    do__STR();
+                }
+            } else {
+                do__STRH();                // halfword
+            }
+        }
+        // postindex, write back - Write newly calculated adress to base register?
+        if (IR_postindex || (IR_preindex && IR_write_back)) {
+            R[iws__Rn] = new_adress;
+            R_changed[iws__Rn] = 1;
+
+            if( iws__Rn == 13) {
+                /*************************************************************
+                // Determine "stack emptiness" according to:
+                //    IR_load==1 => load
+                //    IR_postindex==1 => postindex (IR_preindex is reversed)
+                
+                if( IR_load )
+                    empty = IR_preindex;
+                else
+                    empty = IR_postindex;
+                
+                switch # ( CPSR_mode ) {
+                    case SVC_mode: svc_stack.empty = empty; break;
+                    case USR_mode:
+                    case SYS_mode: usr_sys_stack.empty = empty; break;
+                    case IRQ_mode: irq_stack.empty = empty; break;
+                    case FIQ_mode: fiq_stack.empty = empty; break;
+                    //case UND_mode: und_stack.empty = empty; break;
+                    //case ABT_mode: abt_stack.empty = empty; break;                
+                }
+        
+                SP_changed();
+                *************************************************************/
+                push_pop_executed();
+            }
+        }
+
+        // make sure PC remains word-aligned (clear/ignore lowest 2 bits)
+        if (IR_load && iws__Rd == 15) {// PC was a destination
+            R[15] = R[15] & 0xFFFFFFFC;
+        }
+        return;
+    }
+
+    // **************************************************************************
+    // ************************* MULTIPLE DATA TRANSFER *************************
+    // **************************************************************************
+
+    function void do__LDM_STM() {
+        var bits<32> new_adress;
+        var bits<5> j;                        // for indexing R0-R15, max value:16 (-1)
+        /*
+        iws__S_t = IR[22];               // transfer - restore PSR
+        */
+        new_adress = R[iws__Rn] & 0xFFFFFFFC;
+        AR = new_adress;
+        // trace
+        if (t_mnemonic) {
+            if (IR_load) {            // mnemonic
+                print "LDM";
+            } else {
+                print "STM";
+            }
+            tfun_mnemonic_cond();         // condition
+            decode (IR[23..24]) {           // adressing mode
+                case 0b00: print "DA";
+                case 0b01: print "IA";
+                case 0b10: print "DB";
+                case 0b11: print "IB";
+            }
+            printf (" R%d", iws__Rn);     // adress base register
+            if (IR_write_back) {            // write back
+                print "!";
+            }
+            print ", {";
+        }
+              
+        // doit!
+        if (IR_plus) {               // incremental
+            j = 0;
+            while (j <= 15) {             // loop thru registers (incremental)
+                if (IR[j] == 1) {          // register Ri marked
+                    // trace
+                    if (t_mnemonic) { printf (",R%d", j); }
+                    // prepare adress (increment for next register)
+                    if (IR_write_back) {
+                        R[iws__Rn] = R[iws__Rn] + 4;
+                    }
+                    new_adress = new_adress + 4;
+                    if (IR_preindex) {      // preindex
+                        AR = new_adress;
+                    }
+                    // read/write memory
+                    if (IR_load) {      // Load
+                        mem_read(WORD_size);
+                        R[j] = MDIN;
+                        R_changed[j] = 1;
+                    } else {                // Store
+                        MDOUT = R[j];
+                        mem_write(WORD_size);
+                    }
+                }
+                if (IR_postindex) {         // postindex
+                    AR = new_adress;
+                }
+                j = j + 1;                 // next register (loop)
+            }
+        } else {                         // decremental
+            j = 15;
+            while (j < 16) {              // loop thru registers (decremental)
+                if (IR[j] == 1) {          // register Ri marked
+                    // trace
+                    if (t_mnemonic) { printf (",R%d", j); }
+                    // prepare adress (increment for next register)
+                    if (IR_write_back) {
+                        R[iws__Rn] = R[iws__Rn] - 4;
+                    }
+                    new_adress = new_adress - 4;
+                    if (IR_preindex) {      // preindex
+                        AR = new_adress;
+                    }
+                    // read/write memory
+                    if (IR_load) {      // Load
+                        mem_read(WORD_size);
+                        R[j] = MDIN;
+                        R_changed[j] = 1;
+                    } else {                // Store
+                        MDOUT = R[j];
+                        mem_write(WORD_size);
+                    }
+                }
+                if (IR_postindex) {         // postindex
+                    AR = new_adress;
+                }
+                j = j - 1;                 // next register (loop)
+            }
+        }
+        if(IR_write_back)
+            R_changed[iws__Rn] = 1;
+            
+        if(IR_write_back && iws__Rn == 13) {
+            push_pop_executed();
+        }
+            
+        if (t_mnemonic) { print "}"; }
+        
+        // PC is loaded
+        if (IR_load && IR[15] == 1) {
+
+            // keep PC word-aligned
+            R[15] = R[15] & 0xFFFFFFFC;
+            
+            // treat as return any instruction in the form: LDM* R13!,{*,R15}   
+            if(iws__Rn == 13 && IR_write_back)
+                ret_executed;
+        }
+        
+        // was this used to return from exception?  qqq ovo ne ucimo niti ne koristimo
+        if (IR_load && iws__S_t == 1) {
+            if (t_mnemonic) { print "^"; }
+            exception_return();
+        }
+        return;
+    }
+
+
+
+    // **************************************************************************
+    // **************************** DATA PROCESSING *****************************
+    // **************************************************************************
+
+    function void update_CPSR_after_arithmetic_operation () {
+        // update CPSR_f or CPSR_c
+        if (iws__S_p == 1) {
+            if (iws__Rd == 15) {          // R15!! -> return from exception
+                exception_return();
+            } else {                      // other register, set flags
+                N_FLAG = flags;
+                Z_FLAG = flagz;
+                C_FLAG = flagc;
+                V_FLAG = flago;
+                CPSR_changed = 1;
+            }
+        }
+    }
+
+    function void update_CPSR_after_logical_operation () {
+        // update CPSR_f or CPSR_c
+        if (iws__S_p == 1) {
+            if (iws__Rd == 15) {          // R15!! -> return from exception
+                exception_return();
+            } else {                      // other register, set flags
+                N_FLAG = flags;
+                Z_FLAG = flagz;
+                C_FLAG = shifter_cout;
+                // overflow is not affected
+                CPSR_changed = 1;
+            }
+        }
+    }
+
+    function void do__AND () {
+        R[iws__Rd] = and( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_logical_operation ();
+    }
+
+
+    function void do__EOR () {
+        R[iws__Rd] = xor( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_logical_operation ();
+    }
+////////////////////////////////////////////////////////////TODO
+    function void do__SUB () {
+
+        R[iws__Rd] = sub( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+
+    function void do__RSB () {
+
+        R[iws__Rd] = sub( operand, R[iws__Rn] );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+//////////////////////////////////////////////////////////////////////////
+    function void do__ADD () {
+
+        R[iws__Rd] = add( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+
+    function void do__ADC () {
+
+        flagc = C_FLAG;
+        R[iws__Rd] = addc( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+////////////////////////////////////////////TODO
+    function void do__SBC() {
+
+        flagc = C_FLAG;
+        R[iws__Rd] = subc( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+
+    function void do__RSC() {
+
+        flagc = C_FLAG;
+        R[iws__Rd] = subc( operand, R[iws__Rn] );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_arithmetic_operation ();
+    }
+//////////////////////////////////////////////////////////
+    function void do__TST () {
+
+        dummy = and( R[iws__Rn], operand );
+
+        // update CPSR_f
+
+        N_FLAG = flags;
+        Z_FLAG = flagz;
+        C_FLAG = shifter_cout;
+        CPSR_changed = 1;
+    }
+
+    function void do__TEQ () {
+
+        dummy = xor( R[iws__Rn], operand );
+
+        // update CPSR_f
+        N_FLAG = flags;
+        Z_FLAG = flagz;
+        C_FLAG = shifter_cout;
+        CPSR_changed = 1;
+    }
+///////////////////////////////////////////////////////
+    function void do__CMP () {
+
+        dummy = sub( R[iws__Rn], operand );
+
+        // update CPSR_f or CPSR_c
+        N_FLAG = flags;
+        Z_FLAG = flagz;
+        C_FLAG = flagc;
+        V_FLAG = flago;
+        CPSR_changed = 1;
+    }
+
+    function void do__CMN() {
+
+        dummy = add( R[iws__Rn], operand );
+
+        // update CPSR_f or CPSR_c
+        N_FLAG = flags;
+        Z_FLAG = flagz;
+        C_FLAG = flagc;
+        V_FLAG = flago;
+        CPSR_changed = 1;
+    }
+/////////////////////////////////////////////////////////////////
+    function void do__ORR () {
+        R[iws__Rd] = or( R[iws__Rn], operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_logical_operation ();
+    }
+
+    function void do__MOV (bool LR_source) {
+        R[iws__Rd] = operand;
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_logical_operation ();
+        
+        // provjeri jel' naredba: MOV PC, LR
+        if( iws__Rd == 15  &&  LR_source ) {
+            ret_executed;
+            //if( step == 0 ) {
+            //    debug_arrow.visible = false;
+            //} else {
+            //    debug_arrow.visible = true;
+            //}
+        }
+    }
+
+    function void do__BIC () {
+        R[iws__Rd] = and( R[iws__Rn], ~operand );
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        update_CPSR_after_logical_operation ();
+    }
+
+    function void do__MVN () {
+        R[iws__Rd] = ~operand;
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        test( R[iws__Rd] );
+        update_CPSR_after_logical_operation ();
+    }
+
+
+    // --------------------------------------------------------------------------
+    function void decode3__data_processing () {
+        var bool LR_source;     // false by default
+        var bits<32> amount;                  // rotate immediate8 to form immediate32
+                                               // OR for immediate (5b) or register (8b)
+        // trace
+        if (t_mnemonic) {
+            tfun_mnemonic__data_processing();// opcode
+            tfun_mnemonic_cond();         //condition
+            if (iws__opcode != TST_opcode && iws__opcode != TEQ_opcode &&
+                iws__opcode != CMP_opcode && iws__opcode != CMN_opcode) {
+                if (iws__S_p == 1) {       // S flag
+                    print "S";
+                }
+            }
+            printf (" R%d", iws__Rd);     // destination
+            if (iws__opcode != TST_opcode && iws__opcode != TEQ_opcode &&
+                iws__opcode != CMP_opcode && iws__opcode != CMN_opcode &&
+                iws__opcode != MOV_opcode && iws__opcode != MVN_opcode) {
+                printf (", R%d", iws__Rn); //first operand (Rn)
+            }
+        }
+        // prepare second operand
+        if (IR[25] == 1) {               // 12-bit coded immediate
+            operand #= iws__immediate8;
+            operand = rotr (operand, 2#<5> * iws__rotate);
+            if (t_mnemonic) {             // trace - second operand: immediate
+                printf (", #%d", operand);
+            }
+        } else {                         // Rm (shifted by Rs or shift_amount5)
+        
+            // provjeri je li izvor LR bez pomaka
+            if( iws__Rm == 14  &&  IR[4..11]==0 )
+                LR_source = true;
+            
+            operand = R[iws__Rm];        // raw unshifted operand
+            if (t_mnemonic) {
+                printf (", R%d", iws__Rm); // register to be shifted
+            }
+            if (t_mnemonic) {
+                tfun_mnemonic_opnd2shift();
+            }
+            
+            // calculate shift amount
+            if (IR[4] == 1) {             // shift Rm by value in Rs[7..0]
+                amount = R[iws__Rs];
+                amount = amount & 0x000000FF;
+            } else {                      // shift Rm by incoded shift_amount5 imm
+                amount = iws__shift_amount;
+                if (iws__shift == LSR_opcode  || iws__shift == ASR_opcode) {
+                    if (iws__shift_amount == 0) {
+                        amount = 32;
+                    }
+                }
+            }
+
+            // perform shifting
+
+            decode (iws__shift) {
+                case LSL_opcode: 
+                    if(iws__shift_amount == 0) { // LSL #0 - without shift/rot
+                        shifter_cout = C_FLAG; // C is not changed (use old C)
+                    } else {
+                        operand = shiftl (operand, amount);   // LSL
+                        shifter_cout = flagx; // C is output bit
+                    }
+                case LSR_opcode: 
+                    operand = shiftr (operand, amount);  // LSR
+                    shifter_cout = flagx; // C is output bit
+                case ASR_opcode: 
+                    operand = ashiftr (operand, amount);  // ASR
+                    shifter_cout = flagx; // C is output bit
+                case ROR_RRX_opcode:
+                    if (IR[4] == 0 && iws__shift_amount == 0) {
+                        shifter_cout = operand[0]; // C is output bit
+                        flagx = C_FLAG;
+                        operand = rotxr (operand, 1);    // RRX
+                        // qqq ne radi jer rotxr stalno puni 0 u flagx
+                        //shifter_cout = flagx;  // C is output bit
+                    } else {
+                        operand = rotr (operand, amount);  // ROR
+                        shifter_cout = flagx; // C is output bit
+                    }
+            }
+        }
+        // decode and execute instruction
+        decode (iws__opcode) {
+            case AND_opcode: do__AND();     // AND - logical bit-wise AND
+            case EOR_opcode: do__EOR();     // EOR - logical bit-wise exclusive OR
+            case SUB_opcode: do__SUB();     // SUB - subtract
+            case RSB_opcode: do__RSB();     // RSB - reverse subtract
+            case ADD_opcode: do__ADD();     // ADD - add
+            case ADC_opcode: do__ADC();     // ADC - add with carry
+            case SBC_opcode: do__SBC();     // SBC - subtract with carry
+            case RSC_opcode: do__RSC();     // RSC - reverse subtract with carry
+            case TST_opcode: do__TST();     // TST - test
+            case TEQ_opcode: do__TEQ();     // TEQ - test equivalence
+            case CMP_opcode: do__CMP();     // CMP - compare
+            case CMN_opcode: do__CMN();     // CMN - compare negated
+            case ORR_opcode: do__ORR();     // ORR - logical bit-wise OR
+            case MOV_opcode: do__MOV(LR_source);     // MOV - move
+            case BIC_opcode: do__BIC();     // BIC - bit clear
+            case MVN_opcode: do__MVN();     // MVN - move negated
+        }
+
+        wait_next_rise_clock();	// data processing instruction have duration of 1 clock period
+        return;
+    }
+
+    // **************************************************************************
+    // ******************************* MULTIPLY *********************************
+    // **************************************************************************
+    // 32bit unsigned_multiply and multiply_and_accumulate
+    function void do__MUL_MLA () {
+        var bits<32> result;
+
+        // because MUL/MLA use Rd and Rn differently than other instructions
+        iws__Rd = IR[16..19];
+        iws__Rn = IR[12..15];
+
+        // trace
+        if (t_mnemonic) {
+            // mnemonic
+            if (IR[21..23] == 0) {
+                print "MUL";
+            } else {
+                print "MLA";
+            }
+            // condition
+            tfun_mnemonic_cond();
+            // flag S (to affect N and Z in CPSR)
+            if (iws__S_p == 1)
+                { print "S"; }
+            printf (" R%d, R%d, R%d", iws__Rd, iws__Rm, iws__Rs);
+            if (IR[22..24] != 0)
+                { printf (", R%d", iws__Rn); }
+        }
+
+        result = R[iws__Rm] * R[iws__Rs];
+        if (IR[21..23] != 0) {             // accumulate
+            result = result + R[iws__Rn];
+        }
+        R[iws__Rd] = result;
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+           
+        // set flags?
+        if (iws__S_p == 1) {             // S flag --> set N and Z in CPSR
+            if (result == 0) {
+                Z_FLAG = 1;
+            } else {
+                Z_FLAG = 0;
+            }
+            N_FLAG = result[31];
+            CPSR_changed = 1;
+        }
+    }
+
+    function void do__MULL_MLAL ()
+    {
+        var bits<64> result;
+        var bits<64> accumulator;
+        
+        // trace
+        if (t_mnemonic) {
+            // mnemonic
+            if( IR[22] == 0 ) {
+                print "U";
+            } else {
+                print "S";
+            }
+
+            if (IR[21] == 0) {
+                print "MULL";
+            } else {
+                print "MLAL";
+            }
+            // condition
+            tfun_mnemonic_cond();
+            // flag S (to affect N and Z in CPSR)
+            if (iws__S_p == 1)
+                { print "S"; }
+            printf (" R%d, R%d, R%d, R%d", iws__Rd, iws__Rn, iws__Rm, iws__Rs);
+        }
+        
+        if( IR[22] == 0 ) {
+            // UNSIGNED
+            result = R[iws__Rm] ** R[iws__Rs];
+        } else {
+            // SIGNED
+            result = R[iws__Rm] lmul R[iws__Rs];
+        }
+        
+        if( IR[21] == 1 ) {
+            // ACCUMULATE
+            accumulator #= R[iws__Rd];
+            accumulator[32..63] #= R[iws__Rn];
+            result = result + accumulator;
+        }
+        
+        // Store result in registers
+        R[iws__Rd] = result[0..31];
+        R_changed[iws__Rd] = 1;
+        if( iws__Rd == 13 )
+           SP_changed();
+        R[iws__Rn] = result[32..63];
+        R_changed[iws__Rn] = 1;
+        if( iws__Rn == 13 )
+           SP_changed();
+        
+        // set flags?
+        if (iws__S_p == 1) {             // S flag --> set N and Z in CPSR
+            if (result == 0) {
+                Z_FLAG = 1;
+            } else {
+                Z_FLAG = 0;
+            }
+            N_FLAG = result[63]; 
+            CPSR_changed = 1;
+        }
+    }
+
+    // --------------------------------------------------------------------------
+    function void decode3__multiply () {
+        if( IR[23] == 0) {
+            // 32bit multiply (MUL, MLA)
+            do__MUL_MLA();
+            
+        } else {
+            // 64bit multiply (UMULL, UMLAL, SMULL, SMLAL)
+            do__MULL_MLAL ();
+        }
+
+        wait_next_rise_clock();	// multiplications have duration of 1 clock period
+        return;
+    }
+
+    // **************************************************************************
+    // **************************** P S R  TRANSFER *****************************
+    // **************************************************************************
+
+    // MRS: CPSR/SPSR -> Rd
+    function void do__MRS () 
+    {
+        var bits<32> retval;
+    
+        // trace - print instruction parts
+        if (t_mnemonic) {
+            print "MRS";                  // mnemonic
+            tfun_mnemonic_cond();         // condition
+            printf (" R%d, ", iws__Rd);   // param1: Rd
+        }
+        if (iws__R == 1) {               // SPSR
+            if (t_mnemonic) {print "SPSR";}// param2: SPSR
+            // check if SPSR is mapped (exceptional mode active)
+            if (CPSR_mode != USR_mode && CPSR_mode != SYS_mode) {// User, System
+                R[iws__Rd] = SPSR;         // Rd <-- SPSR_<mode>
+                R_changed[iws__Rd] = 1;
+                if( iws__Rd == 13 )
+                    SP_changed();
+            } else {
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Pokusali ste pristupiti registru SPSR koji ne postoji ";
+                //println "u User i System nacinu rada!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                               "Naredba MRS: pokušaj čitanja iz SPSR koji ne postoji u načinima rada USR/SYS",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            }
+        } else {                         // CPSR
+            if (t_mnemonic) {print "CPSR";}// param2: CPSR
+            R[iws__Rd] = CPSR;            // Rd <-- CPSR
+            R_changed[iws__Rd] = 1;
+            if( iws__Rd == 13 )
+                SP_changed();
+        }
+        wait_next_rise_clock();	// MRS duration is 1 clock period
+        return;
+    }
+
+
+    // MSR: Rm/imm -> CPSR/SPSR
+    function void do__MSR ()
+    {
+        var bits<1> old_T_bit;
+        var bits<1> new_T_bit;
+
+        var bits<5> old_Mode_bits;
+        var bits<5> new_Mode_bits;
+
+        var bits<32> mask = 0;
+        
+        var bits<32> retval;
+
+        // trace - print instruction parts
+        if (t_mnemonic) {
+            print "MSR";                  // mnemonic
+            tfun_mnemonic_cond();         // condition
+            // param1: SPSR / CPSR
+            if (iws__R == 1) { print " SPSR"; }
+            else { print " CPSR"; }
+        }
+
+        // which fields of PSR to alter?
+        if( IR[16] == 0 ) { // flags bit only
+            if (t_mnemonic) { print "_flg"; }// trace
+            mask = 0xF0000000;
+        } else { // whole PSR
+            mask = 0xF00000FF;
+        }
+
+        // immediate / Rm ?
+        if (IR[25] == 1) {               // immediate
+            operand #= iws__immediate8;
+            operand = rotr (operand, 2#<5> * iws__rotate);
+        } else {                         // Rm
+            operand = R[iws__Rm];
+        }
+
+        // trace - last part (immediate / Rm)
+        if (t_mnemonic) {
+            if (IR[25] == 1) {            // immediate
+                printf (", #0x%08H", operand);
+            } else {                      // Rm
+                printf (", R%d", iws__Rm);
+            }
+        }
+        
+        // if current mode allows, alter the desired bits in SPSR/CPSR
+        if (iws__R == 1) {               // SPSR
+            old_T_bit = SPSR[5];
+            old_Mode_bits = SPSR[0..4];
+            if (CPSR_mode != USR_mode && CPSR_mode != SYS_mode) {// NOT: User, System
+                SPSR = SPSR & ~mask;             // clear bits that need to be altered
+                SPSR = SPSR | (operand & mask);  // write new bit values
+                new_T_bit = SPSR[5];
+                new_Mode_bits = SPSR[0..4];
+            } else {
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Pokusali ste pristupiti registru SPSR iako se nalazite ";
+                //println "u nacinu rada System ili User u kojima SPSR ne postoji!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                               "Naredba MSR: pokušaj upisa u SPSR koji ne postoji u načinima rada USR/SYS",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            }
+        } else {                         // CPSR
+            old_T_bit = CPSR[5];
+            old_Mode_bits = CPSR_mode;
+            if (CPSR_mode != USR_mode) {         // NOT: User
+                CPSR = CPSR & ~mask;             // clear bits that need to be altered
+                CPSR = CPSR | (operand & mask);  // write new bit values
+                CPSR_changed = 1;
+                new_T_bit = CPSR[5];
+                new_Mode_bits = CPSR[0..4];
+            } else if( mask == 0xF00000FF ) {    // User mode AND trying to access control bits
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Pokusali ste pisati u kontrolne bitove od CPSR iako se ne nalazite ";
+                //println "u privilegiranom nacinu rada!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                               "Naredba MSR: u načinu rada USR zabranjeno je pisati u kontrolne bitove registra CPSR",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            }
+        }
+        
+        if( old_T_bit != new_T_bit ) {
+            //print "\n[EXCEPTION on component: ARM] --> ";
+            //println "Greska u programu!";
+            //print "Naredba MSR promijenila je T-bit (Thumb) u statusnom registru!";
+            retval = popup_error ( "Greška u asemblerskom programu",
+                               "Naredba MSR: naredba MSR ne smije mijenjati sadržaj bita T u registrima CPSR/SPSR",
+                               "Ok");
+            debug_arrow.visible = true; 
+            delay 0;
+            error;
+        }
+
+        if( old_Mode_bits != new_Mode_bits ) {
+            switch # (new_Mode_bits) {
+            case USR_mode:
+            case SYS_mode:
+            case IRQ_mode:
+            case FIQ_mode:
+            case UND_mode:
+            case ABT_mode:
+            case SVC_mode: {
+                if (iws__R == 0) {
+                    // CPSR is written => Change mode
+                    save_logical_to_physical_registers_before_mode_change(old_Mode_bits);
+                    copy_physical_to_logical_registers_after_mode_change();
+                }
+
+                break;
+            }
+            default:
+                //print "\n[EXCEPTION on component: ARM] --> ";
+                //println "Greska u programu!";
+                //print "Naredba MSR upisala je u registar ";
+                //if (iws__R == 1) { print "SPSR"; }
+                //else { print "CPSR"; }
+                //print " nepostojeci nacin rada!";
+                retval = popup_error ( "Greška u asemblerskom programu",
+                               "Naredba MSR upisala je nepostojeći način rada u registar CPSR/SPSR",
+                               "Ok");
+                debug_arrow.visible = true; 
+                delay 0;
+                error;
+            }
+        }
+        
+        wait_next_rise_clock();	// MSR duration is 1 clock period
+        return;
+    }
+
+    // **************************************************************************
+    // *************************** BRANCH [and LINK] ****************************
+    // **************************************************************************
+    function void do__B_BL () {
+        if (t_mnemonic) { print "B"; }   // B
+        if (iws__L_b == 1) {
+            if (t_mnemonic) { print "L"; }// BL
+            // save address of next instruction (after this) to LR
+            R[14] = R[15];
+            R_changed[14] = 1;
+        }
+        if (t_mnemonic) { tfun_mnemonic_cond(); }// trace: condition
+        // calculate branch adress from immediate: PC + 4 + (signed iws__immediate24)<<2 :)
+        operand = $<32> (iws__immediate24);
+        R[15] = R[15] + 4 + (operand<<2);
+        R_changed[15] = 1;
+        if (t_mnemonic) { printf(" 0x%08H", R[15]); }
+        
+        if (iws__L_b == 1)
+            call_executed;
+            
+        wait_next_rise_clock();	// B/BL duration is 1 clock period
+        return;
+    }
+
+    // **************************************************************************
+    // ********************************** SWI ***********************************
+    // **************************************************************************
+    function void do__SWI () {
+        // go to mode Supervisor
+        svc_go();
+        // for now, only simulation termination instruction is implemented
+        if (t_mnemonic) {
+            println "SWI ----------- Processor is halted!";
+        }
+        debug_arrow.visible = true;
+        wait_next_rise_clock();	// SWI duration is 1 clock period
+        exit;
+    }
+
+    // **************************************************************************
+    // ************************** NON-ARM - UNDEFINED ***************************
+    // **************************************************************************
+    
+   
+    // --------------------------------------------------------------------------
+    // STAGE-3 decode
+    function void decode3__undefined ()
+    {
+        var bits<32> retval;
+        println "Illegal machine code 0x ", IR, " is fetched from address 0x ", R[15]-4;        
+        
+        und_go();   // go to mode Undefined
+        
+        retval = popup_error ( "Greška u asemblerskom programu",
+                               "Dohvaćen je strojni kod nepostojeće naredbe\nVidi konzolu za detaljniju poruku.",
+                               "Ok");
+        debug_arrow.visible = true; 
+        delay 0;
+        error;
+    }
+
+    // ============================================================== INSTRUCTION DECODE LOGIC
+    // STAGE2: decode and call proper exec function
+
+    
+    function void decode2__decode () {
+
+        if( IR[27..26] == 0b00 ) {
+            // one of:   ALU/MSR/MUL/LDRH/SWAP or BEX(not implemented)
+        
+            if(IR[25] == 0b1 ) {
+                // ALU/MSR/MRS (with immediate operand)
+                
+                // machine code for MRS/MSR is equal to
+                //   TST/TEQ/CMP/CMN with bit 20 set to 0 (S==0)
+                if(IR[24..20] == 0bx_10xx_0) {
+                    // MSR or MRS
+                    if(IR[21..16] == 0b001111)
+                        do__MRS();
+                    else
+                        do__MSR();
+                        
+                } else {
+                    // ALU i.e. data processing
+                    decode3__data_processing();
+                }
+                return;
+            }
+            
+            if(IR[11..4] == 0b_1111_0001 ) {
+                // one of:  BEX(not implemented)
+                decode3__undefined();
+                return;
+            }
+                
+            if( IR[7..4] == 0bx_1xx1 ) {
+                // one of:   MUL/MULL/SWAP(not implemented)/LDRH
+                
+                if(IR[6..5] == 0b00) {
+                    if(IR[24] == 0b0) {
+                        // MUL/MULL
+                        decode3__multiply();
+                    } else {
+                        // SWP (undefined)
+                        decode3__undefined();
+                    }
+                } else {
+                    // LDRH/STRH etc.
+                    word_flag = 0;
+                    decode3__data_transfer();
+                }
+
+            } else {  // IR[7..4] != 1xx1
+                // one of:  ALU/MSR/MRS
+                        
+                // machine code for MRS/MSR is equal to
+                //   TST/TEQ/CMP/CMN with bit 20 set to 0 (S==0)
+                if(IR[24..20] == 0bx_10xx_0) {
+                    // MSR or MRS
+                    if(IR[21..16] == 0b001111)
+                        do__MRS();
+                    else
+                        do__MSR();
+                        
+                } else {
+                    // ALU i.e. data processing
+                    decode3__data_processing();
+                }
+            }
+        
+        } else if( IR[27..26] == 0b01 ) {
+            // one of:   LDR/UND
+            
+            if(IR[25] != 1 || IR[4] != 1) {
+                // LDR/STR/LDRB/STRB
+                word_flag = 1;
+                decode3__data_transfer();
+                
+            } else {
+                // UND
+                decode3__undefined();
+            }
+            
+        } else if( IR[27..26] == 0b10 ) {
+            // one of:   LDM/B/BL
+            
+            if (IR[25] == 0b0) {
+                // multiple data transfer
+                do__LDM_STM();
+                
+            } else { // IR[25] == 0b1
+                // B/BL
+                do__B_BL();
+            }
+        
+        } else { // IR[27..26] == 0b11
+            // one of:   SWI/coprocessor(not implemented)
+            
+            if (IR[24..27] == 0b1111) {
+                // SWI
+                do__SWI(); // will enter Supervisor mode and execute itself
+                
+            } else {
+                // coprocessor instructions (not implemented)
+                decode3__undefined();
+            }
+        }
+    }
+
+
+    // STAGE1: condition evaluate (qqq stara funkcija je ispod)
+        function bool decode1__cond_evaluate ()
+    {
+        // check if flags in CPSR complies to the required condition (IR_cond)
+        decode (IR_cond) {
+            case EQ_cond:     return (Z_FLAG == 1);                          //EQ - equal / equals zero
+            case NE_cond:     return (Z_FLAG == 0);                          //NE - not equal
+            case CS_HS_cond:  return (C_FLAG == 1);                          //CS/HS - carry set / unsigned higher or same
+            case CC_LO_cond:  return (C_FLAG == 0 );                         //CC/LO - carry clear / unsigned lover
+            case MI_cond:     return (N_FLAG == 1 );                         //MI - minus / negative
+            case PL_cond:     return (N_FLAG == 0 );                         //PL - plus / positive or zero
+            case VS_cond:     return (V_FLAG == 1 );                         //VS - overflow
+            case VC_cond:     return (V_FLAG == 0 );                         //VC - no overflow
+            case HI_cond:     return (C_FLAG == 1 && Z_FLAG == 0 );          //HI - unsigned higher
+            case LS_cond:     return (C_FLAG == 0 || Z_FLAG == 1 );          //LS - unsigned lower or same
+            case GE_cond:     return (N_FLAG == V_FLAG );                    //GE - signed greater then or equal
+            case LT_cond:     return (N_FLAG != V_FLAG );                    //LT - signed less than
+            case GT_cond:     return (Z_FLAG == 0 && (N_FLAG == V_FLAG) );   //GT - signed grater than
+            case LE_cond:     return (Z_FLAG == 1 || (N_FLAG != V_FLAG) );   //LE - signed less than or equal
+            case ALWAYS_cond: return 1;                                      //AL - always
+
+            default: // CODE 1111 MUST NOT BE USED
+                //printf ( "Dohvacena naredba s ilegalnim uvjetom 1111\n" );
+                // ovo se nikad nece izvesti jer se uvjet 1111 ručno ispita ranije
+                return 0;
+        }
+    }
+    /*
+    function bool decode1__cond_evaluate ()
+    {
+        // check if flags in CPSR complies to the required condition (IR_cond)
+        decode (IR_cond) {
+            case EQ_cond:
+                if (Z_FLAG == 1) return 1;    //EQ - equal / equals zero 
+                else return 0;  // qqq kad se uvede decode, grane "else return 0" se moze brisati
+            case NE_cond:
+                if (Z_FLAG == 0) return 1;    //NE - not equal
+                else return 0;
+            case CS_HS_cond:
+                if (C_FLAG == 1) return 1;    //CS/HS - carry set / unsigned higher or same
+                else return 0;
+            case CC_LO_cond:
+                if (C_FLAG == 0 ) return 1;   //CC/LO - carry clear / unsigned lover
+                else return 0;
+            case MI_cond:
+                if (N_FLAG == 1 ) return 1;   //MI - minus / negative
+                else return 0;
+            case PL_cond:
+                if (N_FLAG == 0 ) return 1;   //PL - plus / positive or zero
+                else return 0;
+            case VS_cond:
+                if (V_FLAG == 1 ) return 1;   //VS - overflow
+                else return 0;
+            case VC_cond:
+                if (V_FLAG == 0 ) return 1;   //VC - no overflow
+                else return 0;
+            case HI_cond:
+                if (C_FLAG == 1 && Z_FLAG == 0 ) return 1;    //HI - unsigned higher
+                else return 0;
+            case LS_cond:
+                if (C_FLAG == 0 || Z_FLAG == 1 ) return 1;    //LS - unsigned lower or same
+                else return 0;
+            case GE_cond:
+                if (N_FLAG == V_FLAG ) return 1;    //GE - signed greater then or equal
+                else return 0;
+            case LT_cond:
+                if (N_FLAG != V_FLAG ) return 1;    //LT - signed less than
+                else return 0;
+            case GT_cond:
+                if (Z_FLAG == 0 && (N_FLAG == V_FLAG) ) return 1;    //GT - signed grater than
+                else return 0;
+            case LE_cond:
+                if (Z_FLAG == 1 || (N_FLAG != V_FLAG) ) return 1;    //LE - signed less than or equal
+                else return 0;
+            case ALWAYS_cond:
+                return 1;    //AL - always
+
+            default: // CODE 1111 MUST NOT BE USED
+                //printf ( "Dohvacena naredba s ilegalnim uvjetom 1111\n" );
+                // ovo se nikad nece izvesti jer se uvjet 1111 ručno ispita ranije
+                return 0;
+        }
+    }
+    */
+
+
+    // ================================================================ MAIN PROCESS
+
+    init {
+        // Used for assigning return values from dummy-valued-functions
+        // in order to avoid warning "discarded return value"
+        var bits<32> dummy;
+        
+        // "serve" RESET exception
+        
+        // All registers are cleared automatically
+        AR = 0;
+        // Flags cleared, IRQ&FIQ disabled, ARM state, Mode: Supervisor
+        // CPSR: flags=0, I=1, F=1, T=0, M[]=SVC_mode;
+        CPSR = 0b11000000#<32> | SVC_mode;
+        nMREQ = 1;                       // AHB disabled (nMREQ active low)
+        HGRANT = 0;
+        
+		dec_toggle.sensitive = true;
+        
+        tfun_g_registers();
+
+        debug_arrow.arrow_address = 0;
+        debug_arrow.visible = false;
+        prefetch = 0;
+    }
+
+
+    process {
+
+        init{
+            var bits<32> retval;
+            var bool cond;
+            var bool pause_simulation = false;
+        }
+        
+        debug_arrow.arrow_color = true_color;
+
+        ////////////////////////////////////////////////
+        // FETCH
+        ////////////////////////////////////////////////
+
+
+        // prepare for mem_read()
+        AR = R[15];             // PC -> AR
+        prefetch = 1;
+        mem_read(WORD_size);             // READ MEMORY
+        prefetch = 0;
+
+        // copy prefetched machine code to instruction register
+        IR = MDIN;
+
+        ////////// Handle conditional executions
+        if( IR_cond == 0b1111 ) {
+            retval = popup_error( "Greška u asemblerskom programu",
+                          "Dohvaćena je naredba s ilegalnim uvjetom (0b1111)\nProvjerite vrijednost memorijske lokacije na koju pokazuje registar PC",
+                          "Ok");
+            debug_arrow.visible = true; 
+            delay 0;
+            error;
+        }
+        cond = decode1__cond_evaluate();
+        if ( cond ) {// condition fullfiled :)
+            debug_arrow.arrow_color = true_color;
+        } else {                         // condition NOT fulfilled :(
+            debug_arrow.arrow_color = false_color;
+        }
+
+        debug_arrow.arrow_address = R[15];
+        
+        if( pause_requested ) {
+            debug_arrow.visible = true;
+            pause_simulation = true;
+            
+        } else if( breakpoint( R[15] ) ) {
+            //printf ("2 Reached breakpoint at %H\n", R[15] );
+            debug_arrow.visible = true;
+            pause_simulation = true;
+            
+        } else if( step ) {
+            // step execution
+            debug_arrow.visible = true;
+            pause_simulation = true;
+            
+        } else {
+            // normal run (arrow is NOT visible)
+            debug_arrow.visible = false;
+            pause_simulation = false;       
+        }
+        
+        // this delay will enable drawing of debug_arrow
+        on_high clock;
+        
+        if( pause_simulation )
+            pause;
+            
+        if (t_mnemonic) { printf ("0x%08H  ", R[15]); }
+        R[15] = R[15] + 4;      // PC += 4
+        R_changed[15] = 1;
+
+
+        ////////////////////////////////////////////////
+        // DECODE, EXECUTE
+        ////////////////////////////////////////////////
+
+        // instruction word segments     // used by all
+        iws__opcode = IR[21..24];
+        iws__S_p = IR[20];
+        iws__S_t = IR[22];
+        iws__Rn = IR[16..19];
+        iws__Rd = IR[12..15];            // PSR
+        iws__Rs = IR[8..11];
+        iws__Rm = IR[0..3];              // PSR
+        iws__shift_amount #= IR[7..11];
+        iws__shift = IR[5..6];
+        iws__rotate = IR[8..11];         // PSR
+        iws__immediate24 = IR[0..23];    // branch
+        iws__immediate12 = IR[0..11];
+        iws__immediate8 #= IR[0..7];
+        iws__R = IR[22];                 // PSR
+        iws__mask = IR[16..19];          // PSR
+
+        iws__L_b = IR[24];               // branch
+
+        // Is required condition fulfilled in CPSR_f?
+        // (This is already computed and stored in cond)
+        if (cond) { // condition fullfiled
+            decode2__decode();
+        } else {                         // condition NOT fulfilled :(
+            if (t_mnemonic) {
+                print "Uvjet nije zadovoljen. Naredba je preskocena.";
+            }
+            wait_next_rise_clock();      // "NOP" has duration of 1 clock period
+        }
+        if (t_mnemonic) {
+            print "\n";                  // instruction delimiter in trace
+        }
+
+        // animate registers
+        tfun_g_registers();
+
+        // TRACE, trace and trace :)
+        if (t_registers) {               // trace: registers
+            tfun_registers();
+        }
+        if (t_int) {                     // trace: interrupt subsystem
+            tfun_int();
+        }
+
+        ////////////////////////////////////////////////
+        // Check Bus requests and Interrupt requests
+        ////////////////////////////////////////////////
+        
+        // BUS requested?
+        if( HBUSREQ == 1 ) {
+            // release bus
+            //disable nMREQ;
+            nMREQ = 1; //connected to wired-and
+            disable HADDR;
+            disable HSIZE;
+            disable HWRITE;
+            
+            HGRANT = 1;
+            pins.fill_color = very_light_gray;
+            pins.line_color = very_light_gray;
+            
+            // wait for DMA-transfer to finish
+            wait( fall(HBUSREQ) );
+            HGRANT = 0;
+            pins.fill_color = light_gray;
+            pins.line_color = light_gray;
+            
+        // FIQ pending?
+        } else if (FIQ == 1 && CPSR_FIQ == ENABLED) {
+            fiq_go();
+            
+        // IRQ pending?
+        } else if (IRQ == 1 && CPSR_IRQ == ENABLED) {
+            irq_go();
+        }
+    }
+}
